@@ -56,3 +56,12 @@ test("a v1 or damaged person session is ignored, so first start shows sign-in", 
     assert.equal(parsePersonSession(raw), null, String(raw));
   }
 });
+
+test("a saved custom profile named like a built-in is kept under a new name, with its choice", () => {
+  const staging = { name: "Teal Brick Dev", issuer: "https://staging.example" };
+  const state = sanitizeControlPlaneRegistry({ version: 1, activeId: profileIdForIssuer(staging.issuer), profiles: [staging] });
+  const kept = state.profiles.find((p) => p.issuer === staging.issuer);
+  assert.equal(kept?.name, "Teal Brick Dev (saved)");
+  assert.equal(state.activeId, kept?.id);
+  assert.equal(state.profiles.filter((p) => p.builtIn).length, 2);
+});

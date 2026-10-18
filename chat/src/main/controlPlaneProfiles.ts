@@ -53,7 +53,10 @@ export function sanitizeControlPlaneRegistry(input: unknown): ControlPlaneState 
   if (Array.isArray(raw.profiles)) {
     for (const candidate of raw.profiles) {
       if (!candidate || typeof candidate.name !== "string" || typeof candidate.issuer !== "string") continue;
-      try { state.profiles.push(createControlPlaneProfile(state, candidate)); } catch { /* Ignore invalid entries. */ }
+      // A saved name that a built-in now uses (e.g. "Teal Brick Dev") keeps the entry under a new name.
+      const taken = BUILT_IN_CONTROL_PLANES.some((p) => p.name.toLowerCase() === candidate.name.trim().toLowerCase());
+      const name = taken ? `${candidate.name.trim()} (saved)` : candidate.name;
+      try { state.profiles.push(createControlPlaneProfile(state, { name, issuer: candidate.issuer })); } catch { /* Ignore invalid entries. */ }
     }
   }
   // Keep the saved choice. "tealbrick" means the hosted Portal, as in v1 0.1.5 (same file).
