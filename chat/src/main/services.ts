@@ -5,7 +5,7 @@ import { saveAttachmentIn } from "./attachmentFile";
 import { app, nativeCall } from "../tbd/host";
 import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
 import { currentControlPlane } from "./controlPlanes";
-import { createPortal, type PersonSession, type Portal } from "./portal";
+import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
 import { createDefaultAgent, type DefaultAgent } from "./defaultAgent";
 import { askPerson } from "./asks";
@@ -40,7 +40,7 @@ export function ensurePerson(): Promise<void> {
 export async function loadPersonSession(): Promise<void> {
   try {
     const raw = (await nativeCall("personLoad", currentControlPlane().issuer)) as string | null;
-    personCache = raw ? (JSON.parse(raw) as PersonSession) : null;
+    personCache = parsePersonSession(raw);
   } catch { personCache = null; }
 }
 function personStore() {

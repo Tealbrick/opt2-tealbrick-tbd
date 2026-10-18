@@ -12,6 +12,12 @@ import { choosePortalWorkspace, workspaceAccountKey, workspaceStateName, type Wo
 let current: WorkspaceSelection | null = null;
 let accountKey: string | null = null;
 
+/** Remembered choices per account. A damaged or older file counts as none, never a crash. */
+function savedChoices(): Record<string, string> {
+  const saved = loadState<unknown>("portal-workspaces.json", {});
+  return saved && typeof saved === "object" && !Array.isArray(saved) ? saved as Record<string, string> : {};
+}
+
 export function resetPortalWorkspace(): void { current = null; accountKey = null; }
 
 export async function loadDirectory(): Promise<WorkspaceDirectory> {
@@ -24,7 +30,7 @@ export async function portalWorkspaces(directoryLoader: () => Promise<WorkspaceD
   resetPortalWorkspace();
   const directory = await directoryLoader();
   accountKey = workspaceAccountKey(currentControlPlane().issuer, directory);
-  const saved = loadState<Record<string, string>>("portal-workspaces.json", {});
+  const saved = savedChoices();
   const selectedId = choosePortalWorkspace(directory.workspaces, saved[accountKey]);
   if (selectedId && saved[accountKey] !== selectedId) saveState("portal-workspaces.json", { ...saved, [accountKey]: selectedId });
   current = { ...directory, selectedId };
@@ -45,7 +51,7 @@ export async function selectPortalWorkspace(id: string, directoryLoader?: () => 
   // Revalidate against the server's list, including deletion since the chooser loaded.
   const directory = await portalWorkspaces(directoryLoader);
   if (!directory.workspaces.some((w) => w.id === id) || !accountKey) throw new Error("This workspace is no longer available.");
-  const saved = loadState<Record<string, string>>("portal-workspaces.json", {});
+  const saved = savedChoices();
   saveState("portal-workspaces.json", { ...saved, [accountKey]: id });
   // End old streams and callbacks before another workspace can read/write state.
   app.emit("tbd:reset-session");

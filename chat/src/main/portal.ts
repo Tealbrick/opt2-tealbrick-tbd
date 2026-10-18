@@ -46,7 +46,7 @@ export interface SessionStore {
 }
 
 export interface PortalDeps {
-  /** Portal origin, e.g. https://dev.tealbrick.com (no path). */
+  /** Portal origin, e.g. https://portal.tealbrick.com (no path). */
   origin: string;
   store: SessionStore;
   machineLabel: string;
@@ -67,6 +67,22 @@ export class PortalError extends Error {
 
 export const OWNER_CLIENT_ID = "tbd" as const;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code" as const;
+
+/**
+ * A stored person session, checked. Anything else (an older app's record, a damaged
+ * value) is no session: the person signs in again instead of TBD sending a bad token.
+ */
+export function parsePersonSession(raw: string | null): PersonSession | null {
+  if (!raw) return null;
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return null; }
+  if (!value || typeof value !== "object") return null;
+  const s = value as Record<string, unknown>;
+  if (typeof s.token !== "string" || !s.token || typeof s.sessionId !== "string" || !s.sessionId) return null;
+  if (typeof s.expiresAt !== "number" || !Number.isFinite(s.expiresAt)) return null;
+  if (s.email !== null && typeof s.email !== "string") return null;
+  return { token: s.token, sessionId: s.sessionId, expiresAt: s.expiresAt, email: s.email };
+}
 
 export function publicPersonSession(s: PersonSession | null): PublicPersonSession | null {
   return s ? { email: s.email, expiresAt: s.expiresAt } : null;
