@@ -2,11 +2,19 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ControlPlaneProfile, ControlPlaneState } from "../shared/controlPlanes";
 
-/** The hosted Teal Brick Portal for this build (opt2 environment). */
+/** The hosted Teal Brick Portal: the default control plane (C257). Same origin as shared DEFAULT_ISSUER. */
 export const COMPANY_CONTROL_PLANE: ControlPlaneProfile = Object.freeze({
   id: "tealbrick", name: "Teal Brick Portal",
+  issuer: "https://portal.tealbrick.com", builtIn: true,
+});
+
+/** The opt2 development Portal: built in and selectable, never the default. */
+export const DEV_CONTROL_PLANE: ControlPlaneProfile = Object.freeze({
+  id: "tealbrick-dev", name: "Teal Brick Dev",
   issuer: "https://dev.tealbrick.com", builtIn: true,
 });
+
+export const BUILT_IN_CONTROL_PLANES: readonly ControlPlaneProfile[] = Object.freeze([COMPANY_CONTROL_PLANE, DEV_CONTROL_PLANE]);
 
 export function normalizeIssuer(value: string): string {
   let url: URL;
@@ -41,15 +49,22 @@ export function createControlPlaneProfile(
 
 export function sanitizeControlPlaneRegistry(input: unknown): ControlPlaneState {
   const raw = input && typeof input === "object" ? input as Record<string, unknown> : {};
-  const state: ControlPlaneState = { activeId: COMPANY_CONTROL_PLANE.id, profiles: [COMPANY_CONTROL_PLANE] };
+  const state: ControlPlaneState = { activeId: COMPANY_CONTROL_PLANE.id, profiles: [...BUILT_IN_CONTROL_PLANES] };
   if (Array.isArray(raw.profiles)) {
     for (const candidate of raw.profiles) {
       if (!candidate || typeof candidate.name !== "string" || typeof candidate.issuer !== "string") continue;
-      try { state.profiles.push(createControlPlaneProfile(state, candidate)); } catch { /* Ignore invalid entries. */ }
+      // A saved name that a built-in now uses (e.g. "Teal Brick Dev") keeps the entry under a new name.
+      const taken = BUILT_IN_CONTROL_PLANES.some((p) => p.name.toLowerCase() === candidate.name.trim().toLowerCase());
+      const name = taken ? `${candidate.name.trim()} (saved)` : candidate.name;
+      try { state.profiles.push(createControlPlaneProfile(state, { name, issuer: candidate.issuer })); } catch { /* Ignore invalid entries. */ }
     }
   }
-  if (raw.activeId === profileIdForIssuer(COMPANY_CONTROL_PLANE.issuer)) state.activeId = COMPANY_CONTROL_PLANE.id;
-  if (typeof raw.activeId === "string" && state.profiles.some((p) => p.id === raw.activeId)) state.activeId = raw.activeId;
+  // Keep the saved choice. "tealbrick" means the hosted Portal, as in v1 0.1.5 (same file).
+  // A custom entry for a built-in origin collapses into that built-in (same data folder).
+  let activeId = raw.activeId;
+  const builtIn = BUILT_IN_CONTROL_PLANES.find((p) => activeId === profileIdForIssuer(p.issuer));
+  if (builtIn) activeId = builtIn.id;
+  if (typeof activeId === "string" && state.profiles.some((p) => p.id === activeId)) state.activeId = activeId;
   return state;
 }
 

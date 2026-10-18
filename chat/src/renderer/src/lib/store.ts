@@ -5,6 +5,7 @@ import { NO_AGENT_NOTE, modelGate, notSentReply, type AgentModelState } from "./
 import { summarize } from "./agentInfo";
 import type { Agent, Block, PeerEvent } from "@shared/types";
 import { reconcile } from "@shared/sessionReplay";
+import { DEFAULT_ISSUER } from "@shared/controlPlanes";
 
 /** Snapshot from a native adapter's /tealbrick/v1/capabilities (no credentials). */
 /**
@@ -665,7 +666,7 @@ export const useStore = create<State>((set, get) => ({
 
   authState: "loading",
   authError: null,
-  issuer: "dev.tealbrick.com",
+  issuer: DEFAULT_ISSUER,
   account: null,
   sessions: {},
   streamIndexes: {},
@@ -1289,7 +1290,7 @@ export const useStore = create<State>((set, get) => ({
     }
     try {
       const planes = await window.studio.controlPlanes();
-      set({ issuer: planes.profiles.find((p) => p.id === planes.activeId)?.issuer ?? "https://dev.tealbrick.com" });
+      set({ issuer: planes.profiles.find((p) => p.id === planes.activeId)?.issuer ?? DEFAULT_ISSUER });
       const session = await window.studio.session();
       if (!session) {
         set({ authState: "signed-out" });

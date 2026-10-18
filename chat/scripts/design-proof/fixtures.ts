@@ -46,7 +46,7 @@ export const PENDING = "__pending__";
 
 /** Return values by method name; anything not listed falls through to harmlessDefault. */
 const fixtures: Partial<Record<keyof StudioApi, unknown>> = {
-  controlPlanes: { activeId: "default", profiles: [{ id: "default", name: "Teal Brick", issuer: "https://dev.tealbrick.com", builtIn: true }] },
+  controlPlanes: { activeId: "tealbrick", profiles: [{ id: "tealbrick", name: "Teal Brick Portal", issuer: "https://portal.tealbrick.com", builtIn: true }, { id: "tealbrick-dev", name: "Teal Brick Dev", issuer: "https://dev.tealbrick.com", builtIn: true }] },
   session: { expiresAt: now + 3_600_000, email: "demo@example.com", orgName: "Demo workspace" },
   portalWorkspaces: { accountId: "acct-demo", organizationId: "org-demo", workspaces: [{ id: "ws-demo", name: "Demo workspace" }], selectedId: "ws-demo" },
   listAgents: agents,
