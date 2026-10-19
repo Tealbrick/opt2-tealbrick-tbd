@@ -114,20 +114,22 @@ struct AgentWallRoster: Equatable {
     let rows = (value as? [Any])?.compactMap { $0 as? [String: Any] } ?? []
     var own: WallAgent?
     var notice: String?
+    // First pass: TBD's own row (no `workspace` key), wherever it stands in the answer.
+    for row in rows where row["workspace"] as? [String: Any] == nil && row["runtime"] as? String == WallAgent.ownRuntime {
+      guard own == nil else { continue }
+      let id = clean(row["id"]) ?? clean(row["name"]) ?? ""
+      own = WallAgent(
+        id: id.isEmpty ? WallAgent.ownRuntime : id, name: clean(row["name"]) ?? "TBD", purpose: "Your own agent",
+        harness: "Built in", state: .online, own: true)
+      notice = clean(row["rosterNotice"])
+    }
+    // The own id is taken: a workspace row with the same id (or with the default own id) is dropped.
+    var seen: Set<String> = [own?.id ?? WallAgent.ownRuntime, WallAgent.ownRuntime]
     var others: [WallAgent] = []
-    var seen = Set<String>()
     for row in rows {
       let workspace = row["workspace"] as? [String: Any]
-      let runtime = row["runtime"] as? String
+      if workspace == nil, row["runtime"] as? String == WallAgent.ownRuntime { continue }
       let id = clean(row["id"]) ?? clean(row["name"]) ?? ""
-      if workspace == nil, runtime == WallAgent.ownRuntime {
-        guard own == nil else { continue }
-        own = WallAgent(
-          id: id.isEmpty ? WallAgent.ownRuntime : id, name: clean(row["name"]) ?? "TBD", purpose: "Your own agent",
-          harness: "Built in", state: .online, own: true)
-        notice = clean(row["rosterNotice"])
-        continue
-      }
       guard !id.isEmpty, seen.insert(id).inserted else { continue }
       let info = workspace ?? [:]
       others.append(
@@ -172,6 +174,9 @@ struct AgentWallState: Equatable {
   var signedIn = false
   /// True after the first answer (or failure) for the signed-in account.
   var loaded = false
+  /// The account has told whether a session exists. Until then the wall shows TBD alone, with no sign-in notice
+  /// (no signed-out flash at launch).
+  var sessionChecked = true
 
   var mode: AgentWallMode {
     if !signedIn { return .signedOut }
@@ -182,7 +187,7 @@ struct AgentWallState: Equatable {
   /// else (once loaded) the "Connect agents" notice.
   var notice: AgentWallNotice? {
     switch mode {
-    case .signedOut: return .signedOut
+    case .signedOut: return sessionChecked ? .signedOut : nil
     case .empty:
       if let text = roster.notice { return AgentWallNotice(text: text, needsYou: true, offersAccount: false) }
       return loaded ? .connect : nil
@@ -197,6 +202,12 @@ struct AgentWallState: Equatable {
   /// Agents that are on the wall and in the list (offline ones leave both when the toggle is off).
   func visible(showOffline: Bool) -> [WallAgent] {
     AgentWallPlan.ordered(agents).filter { showOffline || $0.state != .offline }
+  }
+
+  /// The one VoiceOver label of the wall band: "Agents wall: 6 agents, 3 online, 1 paused, 2 offline."
+  var wallLabel: String {
+    let c = counts
+    return "Agents wall: \(c.total) \(c.total == 1 ? "agent" : "agents"), \(c.online) online, \(c.paused) paused, \(c.offline) offline."
   }
 
   /// Counts include TBD and every state, whatever the toggle says.
@@ -254,18 +265,40 @@ struct AgentWallPlan: Equatable {
     (AgentWallTile.courseOrder[i % AgentWallTile.courseOrder.count], firstColumn + i * columnSpacing)
   }
 
-  /// One brick per agent. The slot comes from the order of ALL agents, so an offline agent keeps its slot when it is
-  /// hidden and the wall does not reshuffle when an agent goes on or off line. Offline agents get no recolour.
-  init(agents: [WallAgent], showOffline: Bool) {
-    let ordered = Self.ordered(agents)
-    // The loop is at least three tiles; more agents widen it so two slots of one course never share a column.
-    let last = Self.firstColumn + max(0, ordered.count - 1) * Self.columnSpacing
+  /// The slot of every agent. TBD's own agent is always slot 0. The other agents take the place the slot book gave them
+  /// (`order`: first-seen order, absent agents included, so nobody moves when an agent comes or goes). An agent the book
+  /// does not know yet goes after the known ones, by name.
+  static func slotIndices(_ agents: [WallAgent], order: [String]) -> [String: Int] {
+    let ownIDs = Set(agents.filter(\.own).map(\.id))
+    let known = order.filter { !ownIDs.contains($0) && $0 != WallAgent.ownRuntime }
+    var result: [String: Int] = [:]
+    for agent in agents where agent.own { result[agent.id] = 0 }
+    let present = Set(agents.filter { !$0.own }.map(\.id))
+    var placed = Set<String>()
+    for (position, id) in known.enumerated() where present.contains(id) && placed.insert(id).inserted { result[id] = position + 1 }
+    var next = known.count + 1
+    for agent in ordered(agents.filter { !$0.own && result[$0.id] == nil }) {
+      result[agent.id] = next
+      next += 1
+    }
+    return result
+  }
+
+  /// One brick per agent. The slot comes from the slot order of ALL agents (see `slotIndices`), so an offline agent keeps
+  /// its slot when it is hidden and the wall does not reshuffle when an agent goes on or off line or a new agent comes.
+  /// Offline agents get no recolour.
+  init(agents: [WallAgent], showOffline: Bool, slotOrder: [String] = []) {
+    let slots = Self.slotIndices(agents, order: slotOrder)
+    let ordered = agents.sorted { (slots[$0.id] ?? 0) < (slots[$1.id] ?? 0) }
+    // The loop is at least three tiles; more slots widen it so two slots of one course never share a column.
+    let lastSlot = slots.values.max() ?? 0
+    let last = Self.firstColumn + lastSlot * Self.columnSpacing
     loopColumns = max(3, (last + AgentWallTile.bricksPerCourse) / AgentWallTile.bricksPerCourse) * AgentWallTile.bricksPerCourse
     var bricks: [WallBrick] = []
     var callouts: [WallCallout] = []
-    for (i, agent) in ordered.enumerated() {
+    for agent in ordered {
       if agent.state == .offline && !showOffline { continue }
-      let slot = Self.slot(i)
+      let slot = Self.slot(slots[agent.id] ?? 0)
       bricks.append(WallBrick(course: slot.course, startColumn: slot.column, length: 1, tone: agent.tone, agentID: agent.id))
       // Two short lines, so neighbours one brick apart never touch.
       let meta = [agent.harness, agent.state.rawValue].filter { !$0.isEmpty }.joined(separator: "\n")
@@ -277,6 +310,75 @@ struct AgentWallPlan: Equatable {
 
   /// The wall x (metres) of the left edge of a cell.
   static func x(course: Int, column: Int) -> Double { AgentWallTile.x(course: course, global: column) }
+}
+
+// MARK: - Slot book (first-seen order, kept on this Mac)
+
+/// The first-seen order of the agents, so a brick never moves when another agent comes or goes. Stored in UserDefaults:
+/// `agentWallSlotOrder` = [agentID] (TBD's own id first), `agentWallSlotSeen` = [agentID: last seen, seconds since 1970].
+/// A new agent goes to the end (several new ones in name order). An agent that leaves keeps its slot for 30 days, then
+/// the slot is pruned.
+struct AgentWallSlotBook: Equatable {
+  static let orderKey = "agentWallSlotOrder"
+  static let seenKey = "agentWallSlotSeen"
+  static let keepSeconds: TimeInterval = 30 * 86_400
+
+  private(set) var order: [String] = []
+  private(set) var lastSeen: [String: TimeInterval] = [:]
+
+  init() {}
+
+  init(defaults: UserDefaults) {
+    order = (defaults.array(forKey: Self.orderKey) as? [String]) ?? []
+    lastSeen = (defaults.dictionary(forKey: Self.seenKey) as? [String: Double]) ?? [:]
+  }
+
+  func save(to defaults: UserDefaults) {
+    defaults.set(order, forKey: Self.orderKey)
+    defaults.set(lastSeen, forKey: Self.seenKey)
+  }
+
+  /// Merge one roster answer. Call it only with a real answer (not with the failure or the signed-out state).
+  mutating func update(with agents: [WallAgent], now: Date) {
+    let t = now.timeIntervalSince1970
+    let ownIDs = agents.filter(\.own).map(\.id)
+    let present = Set(agents.map(\.id))
+    var kept: [String] = []
+    for id in order where !ownIDs.contains(id) && !kept.contains(id) {
+      if present.contains(id) {
+        kept.append(id)
+      } else {
+        // Absent: the clock starts now if it never ran, the slot goes after 30 days.
+        let seen = lastSeen[id] ?? t
+        lastSeen[id] = seen
+        if t - seen < Self.keepSeconds { kept.append(id) }
+      }
+    }
+    for id in present { lastSeen[id] = t }
+    let fresh = agents.filter { !$0.own && !kept.contains($0.id) }
+    kept += AgentWallPlan.ordered(fresh).map(\.id)
+    order = ownIDs + kept
+    lastSeen = lastSeen.filter { order.contains($0.key) }
+  }
+}
+
+// MARK: - Callout text
+
+enum AgentWallLabelText {
+  static let titleLimit = 34
+  static let harnessLimit = 20
+
+  /// `text` cut to `limit` characters with a final ellipsis.
+  static func truncated(_ text: String, limit: Int) -> String {
+    text.count > limit ? String(text.prefix(max(0, limit - 1))) + "…" : text
+  }
+
+  static func title(_ text: String) -> String { truncated(text, limit: titleLimit) }
+
+  /// The meta lines of a callout ("Codex\npaused"): one `Text` each, the harness cut to about 20 characters.
+  static func metaLines(_ meta: String) -> [String] {
+    meta.split(separator: "\n", omittingEmptySubsequences: true).map { truncated(String($0), limit: harnessLimit) }
+  }
 }
 
 // MARK: - Scroll

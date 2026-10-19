@@ -21,11 +21,16 @@ struct AgentWallView: View {
   @State private var selectedID: String?
   @State private var hoverPoint: CGPoint?
   @State private var scroll = AgentWallScroll()
+  /// The hosting window is on screen (not minimised, not covered). The frame clock and the roster timer stop otherwise.
+  @State private var windowVisible = true
   /// Design shots: the wall does not move.
   private let frozen: Bool
 
   static let headerHeight: CGFloat = 84
   static let sideInset: CGFloat = 32
+  /// The hover card (260 pt wide) sits right of the pointer and stays inside the band; never left of 0.
+  static func hoverCardX(pointX: CGFloat, width: CGFloat) -> CGFloat { max(0, min(pointX + 16, width - 280)) }
+  static let namesOnlyInListHint = "Some names are only in this list."
 
   @MainActor
   init(store: AgentWallRosterStore? = nil, frozen: Bool = false) {
@@ -37,7 +42,7 @@ struct AgentWallView: View {
     GeometryReader { geo in
       let state = store.state
       let agents = state.visible(showOffline: showOffline)
-      let plan = AgentWallPlan(agents: state.agents, showOffline: showOffline)
+      let plan = AgentWallPlan(agents: state.agents, showOffline: showOffline, slotOrder: store.slotOrder)
       let selected = AgentWallSelection.valid(selectedID, in: agents)
       let notice = state.notice
       // Everything fits one screen: the wall takes what is left after header, callouts and cards. A small window scrolls.
@@ -45,16 +50,18 @@ struct AgentWallView: View {
       let noticeHeight: CGFloat = notice.map { ($0.text.count > 90 ? 80 : 54) + TBDTokens.Space.lg } ?? 0
       let chrome: CGFloat = 16 + Self.headerHeight + cardsHeight + noticeHeight + 2 * TBDTokens.Space.lg + 16
       let wallHeight = min(360, max(150, geo.size.height - chrome - 2 * AgentWallGeometry.calloutZone))
+      let namesOnlyInList = AgentWallGeometry(plan: plan, width: geo.size.width, wallHeight: wallHeight, shift: 0)
+        .hasUnlabelledBricks(crowding: AgentWallGeometry.crowding(wallHeight: wallHeight))
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: TBDTokens.Space.lg) {
           TBDPageHeader("Agents", label: "Your workspace")
             .padding(.horizontal, Self.sideInset).frame(height: Self.headerHeight, alignment: .top)
-          wallBand(plan: plan, selected: selected, agents: agents, width: geo.size.width, wallHeight: wallHeight)
+          wallBand(plan: plan, selected: selected, agents: agents, width: geo.size.width, wallHeight: wallHeight, label: state.wallLabel)
           if let notice { noticeRow(notice).padding(.horizontal, Self.sideInset) }
           HStack(alignment: .top, spacing: TBDTokens.Space.lg) {
             summary(state).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
               .tbdCard(padding: TBDTokens.Space.lg)
-            list(agents, selected: selected).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            list(agents, selected: selected, namesOnlyInList: namesOnlyInList).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
               .tbdCard(padding: TBDTokens.Space.lg)
             legend.frame(width: 250).frame(maxHeight: .infinity, alignment: .topLeading).tbdCard(padding: TBDTokens.Space.lg)
           }
@@ -65,7 +72,13 @@ struct AgentWallView: View {
         .frame(width: geo.size.width, alignment: .top)
         .frame(minHeight: geo.size.height, alignment: .top)
       }
+      // A selected agent that left the roster (or is hidden now) is not selected any more.
+      .onChange(of: agents) { _, now in selectedID = AgentWallSelection.valid(selectedID, in: now) }
     }
+    .background(AgentWallWindowObserver { visible in
+      windowVisible = visible
+      store.windowVisibilityChanged(visible)
+    })
     .onAppear { store.pageDidAppear() }
     .onDisappear { store.pageDidDisappear() }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -85,17 +98,23 @@ struct AgentWallView: View {
     anchorShift(wallHeight) + (frozen ? 0 : scroll.shift(at: now, reduceMotion: reduceMotion))
   }
 
-  private func wallBand(plan: AgentWallPlan, selected: String?, agents: [WallAgent], width: CGFloat, wallHeight: CGFloat) -> some View {
+  private func wallBand(plan: AgentWallPlan, selected: String?, agents: [WallAgent], width: CGFloat, wallHeight: CGFloat, label: String)
+    -> some View
+  {
     let total = AgentWallGeometry.calloutZone * 2 + wallHeight
-    return TimelineView(.animation(paused: frozen || !scroll.isMoving(reduceMotion: reduceMotion))) { timeline in
+    // 30 frames a second are enough for 16 points a second; no frames at all while the window is hidden.
+    return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: frozen || !windowVisible || !scroll.isMoving(reduceMotion: reduceMotion))) {
+      timeline in
       let shift = currentShift(timeline.date, wallHeight: wallHeight)
-      AgentWallBand(plan: plan, selectedID: selected, width: width, wallHeight: wallHeight, shift: shift)
+      AgentWallBand(
+        plan: plan, selectedID: selected, width: width, wallHeight: wallHeight, shift: shift,
+        crowding: AgentWallGeometry.crowding(wallHeight: wallHeight))
         .overlay(alignment: .topLeading) {
           if let point = hoverPoint,
             let brick = AgentWallGeometry(plan: plan, width: width, wallHeight: wallHeight, shift: shift).brick(at: point),
             let agent = agents.first(where: { $0.id == brick.agentID })
           {
-            hoverCard(agent).offset(x: min(point.x + 16, width - 280), y: max(0, point.y - 110)).allowsHitTesting(false)
+            hoverCard(agent).offset(x: Self.hoverCardX(pointX: point.x, width: width), y: max(0, point.y - 110)).allowsHitTesting(false)
           }
         }
         .contentShape(Rectangle())
@@ -125,7 +144,8 @@ struct AgentWallView: View {
     }
     .frame(height: total)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Brick wall with one brick for each agent of your workspace. The list below has the same agents.")
+    .accessibilityLabel(label)
+    .accessibilityHint("One brick for each agent. The list below has the same agents.")
   }
 
   private func hoverCard(_ agent: WallAgent) -> some View {
@@ -198,11 +218,16 @@ struct AgentWallView: View {
     .accessibilityHidden(true)
   }
 
-  private func list(_ agents: [WallAgent], selected: String?) -> some View {
+  private func list(_ agents: [WallAgent], selected: String?, namesOnlyInList: Bool) -> some View {
     VStack(alignment: .leading, spacing: TBDTokens.Space.sm) {
-      HStack {
+      HStack(spacing: TBDTokens.Space.md) {
         TBDLabel("Agents")
-        Spacer()
+        // Some bricks have no label on the wall (many agents, small wall): the list has every name.
+        if namesOnlyInList {
+          Text(AgentWallView.namesOnlyInListHint).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+            .lineLimit(1).truncationMode(.tail)
+        }
+        Spacer(minLength: 0)
         if selected != nil { Button("Clear") { selectedID = nil }.buttonStyle(TBDButtonStyle(.quiet)) }
       }
       ScrollView(.vertical, showsIndicators: false) {
@@ -247,6 +272,48 @@ struct AgentWallView: View {
       legendRow(.red, "Offline · plain wall")
       legendRow(.deep, "TBD · your own agent")
       Toggle("Show offline agents", isOn: $showOffline).toggleStyle(TBDSwitchStyle())
+    }
+  }
+}
+
+// MARK: - The hosting window
+
+/// Reports whether the hosting window shows the wall: not minimised and not fully covered or hidden
+/// (`NSWindow.occlusionState`, miniaturize and deminiaturize). The page stops its frame clock and its roster timer when not.
+struct AgentWallWindowObserver: NSViewRepresentable {
+  let onChange: (Bool) -> Void
+
+  func makeNSView(context: Context) -> TrackingView {
+    let view = TrackingView()
+    view.onChange = onChange
+    return view
+  }
+
+  func updateNSView(_ view: TrackingView, context: Context) { view.onChange = onChange }
+
+  final class TrackingView: NSView {
+    var onChange: ((Bool) -> Void)?
+    private var tokens: [NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      tokens.forEach(NotificationCenter.default.removeObserver)
+      tokens = []
+      guard let window else { return }
+      for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification] {
+        tokens.append(
+          NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.report() }
+          })
+      }
+      report()
+    }
+
+    /// Reported on the next turn: never a state change inside a view update.
+    private func report() {
+      guard let window else { return }
+      let visible = AgentWallWindowVisibility.isVisible(occlusion: window.occlusionState, miniaturized: window.isMiniaturized)
+      DispatchQueue.main.async { [weak self] in self?.onChange?(visible) }
     }
   }
 }

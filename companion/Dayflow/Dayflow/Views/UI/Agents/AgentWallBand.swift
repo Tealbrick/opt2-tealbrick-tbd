@@ -5,8 +5,11 @@
 //  The wall band of the Agents page (WP-WALL): the v1 renderer, ported. The red photo is tiled across the band,
 //  recoloured bricks are cut from the teal / deep teal / amber photos and clipped to the brick rects (a 1 pt tile overlap
 //  stops hairline seams), a contact shadow sits under the wall and the ends fade 5%. Callouts are SwiftUI Text over the
-//  Canvas (so VoiceOver and the contrast audit can see them) with a leader and a dot. Courses 4 and up label above, the
-//  others below; a label within the crowding distance of another on the same side is skipped.
+//  Canvas (so the contrast audit and sighted users see them) with a leader and a dot. The page makes the whole wall ONE
+//  accessibility element (`.accessibilityElement(children: .ignore)` with one label that counts the agents); the list
+//  below it has each agent for VoiceOver. Courses 4 and up label above, the others below. A label is a fixed width of
+//  crowding - 12 points and a label within the crowding distance of another on the same side is skipped, so two labels of
+//  one side never touch. The four photos are decoded once (`AgentWallPhotoCache`), never per frame.
 //
 
 import AppKit
@@ -53,33 +56,92 @@ struct AgentWallGeometry {
     plan.bricks.first { rects(of: $0).contains { $0.insetBy(dx: -2, dy: -2).contains(point) } }
   }
 
-  struct Placement {
+  /// The distance between two same-side labels. It follows the brick pitch (two columns is the nearest same-side pair of
+  /// the slot rule), between 112 and 160 points: a small wall gets narrower labels instead of lost ones.
+  static func crowding(wallHeight: CGFloat) -> CGFloat {
+    min(160, max(112, 2 * CGFloat(AgentWallTile.pitch) * wallHeight / CGFloat(AgentWallTile.height)))
+  }
+
+  /// The width of a label for a crowding distance.
+  static func labelWidth(crowding: CGFloat) -> CGFloat { max(40, crowding - 12) }
+  static let labelHeight: CGFloat = 44
+
+  struct Placement: Identifiable {
+    /// Agent id + the copy of the loop, so a repeat keeps its identity while the wall scrolls.
+    let id: String
     let callout: WallCallout
     let rect: CGRect
     let above: Bool
     let labelY: CGFloat
     let title: String
+    let metaLines: [String]
+    let labelFrame: CGRect
   }
 
-  /// Courses >= 4 label above, the others below. Two labels on one side need `crowding` points between them.
+  /// Courses >= 4 label above, the others below. Two labels on one side need `crowding` points between them; a label is
+  /// `crowding - 12` points wide, so two labels of one side never touch.
   func placements(crowding: CGFloat) -> [Placement] {
     var placed: [(side: Int, x: CGFloat)] = []
     var out: [Placement] = []
+    let labelWidth = Self.labelWidth(crowding: crowding)
     let ordered = plan.callouts.sorted {
       AgentWallPlan.x(course: $0.course, column: $0.column) < AgentWallPlan.x(course: $1.course, column: $1.column)
     }
     for callout in ordered {
-      for rect in rects(course: callout.course, column: callout.column) where rect.midX > width * 0.07 && rect.midX + 240 < width * 0.95 {
+      let x0 = AgentWallPlan.x(course: callout.course, column: callout.column) * Double(k) + shift
+      for rect in rects(course: callout.course, column: callout.column) where rect.midX > width * 0.07 && rect.midX + crowding < width * 0.95 {
         let above = callout.course >= 4
         let side = above ? 0 : 1
         if placed.contains(where: { $0.side == side && abs($0.x - rect.midX) < crowding }) { continue }
         placed.append((side, rect.midX))
         let labelY: CGFloat = above ? 4 : Self.calloutZone + wallHeight + 6
-        let title = callout.title.count > 34 ? String(callout.title.prefix(33)) + "…" : callout.title
-        out.append(Placement(callout: callout, rect: rect, above: above, labelY: labelY, title: title))
+        let copy = loop > 0 ? Int(((Double(rect.minX) - x0) / loop).rounded()) : 0
+        out.append(
+          Placement(
+            id: "\(callout.agentID)#\(copy)", callout: callout, rect: rect, above: above, labelY: labelY,
+            title: AgentWallLabelText.title(callout.title), metaLines: AgentWallLabelText.metaLines(callout.meta),
+            labelFrame: CGRect(x: rect.midX + 6, y: labelY, width: labelWidth, height: Self.labelHeight)))
       }
     }
     return out
+  }
+
+  /// True when at least one brick can lose its label somewhere on the endless wall: two same-side bricks of the plan are
+  /// closer than `crowding` (also across the end of the loop). The list has every name.
+  func hasUnlabelledBricks(crowding: CGFloat) -> Bool {
+    guard loop > 0 else { return false }
+    for above in [true, false] {
+      let xs = plan.callouts.filter { ($0.course >= 4) == above }.map {
+        agentWallPositiveMod((AgentWallPlan.x(course: $0.course, column: $0.column) + AgentWallTile.brickW / 2) * Double(k), loop)
+      }.sorted()
+      guard xs.count > 1, let first = xs.first, let last = xs.last else { continue }
+      let gaps = zip(xs, xs.dropFirst()).map { $1 - $0 } + [first + loop - last]
+      if gaps.contains(where: { $0 < Double(crowding) }) { return true }
+    }
+    return false
+  }
+}
+
+// MARK: - Photos for the wall (decoded once)
+
+/// The four wall photos as CGImages, decoded once for the whole app. `Canvas` resolves an `Image` per frame; resolving a
+/// decoded CGImage costs no decode.
+final class AgentWallPhotoCache: @unchecked Sendable {
+  static let shared = AgentWallPhotoCache()
+  private let lock = NSLock()
+  private var images: [AgentWallPhoto: CGImage] = [:]
+
+  func cgImage(_ photo: AgentWallPhoto) -> CGImage? {
+    lock.lock()
+    defer { lock.unlock() }
+    if let hit = images[photo] { return hit }
+    guard let cg = NSImage(named: photo.assetName)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+    images[photo] = cg
+    return cg
+  }
+
+  func image(_ photo: AgentWallPhoto) -> Image {
+    cgImage(photo).map { Image(decorative: $0, scale: 1) } ?? Image(photo.assetName)
   }
 }
 
@@ -89,7 +151,8 @@ struct AgentWallBand: View {
   let width: CGFloat
   let wallHeight: CGFloat
   let shift: Double
-  /// v1 used 190 pt; the roster labels are short (two lines, 26 mono characters at most), so the roster wall uses 160.
+  /// v1 used 190 pt; the roster labels are short (title + two cut lines), so the roster wall uses 112...160
+  /// (`AgentWallGeometry.crowding(wallHeight:)`). A label is `crowding - 12` points wide.
   var crowding: CGFloat = 160
 
   private var geometry: AgentWallGeometry { AgentWallGeometry(plan: plan, width: width, wallHeight: wallHeight, shift: shift) }
@@ -108,13 +171,18 @@ struct AgentWallBand: View {
     ZStack(alignment: .topLeading) {
       Canvas { context, size in draw(&context, size: size, geometry: g, placements: placements) }
         .mask(fade)
-      ForEach(Array(placements.enumerated()), id: \.offset) { _, p in
+      ForEach(placements) { p in
         VStack(alignment: .leading, spacing: 0) {
-          Text(p.title).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.ink)
-          Text(p.callout.meta).font(TBDFonts.mono(10)).foregroundStyle(TBDColor.muted).lineLimit(2).fixedSize().padding(.top, 2)
+          Text(p.title).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.ink).lineLimit(1).truncationMode(.tail)
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(p.metaLines.enumerated()), id: \.offset) { _, line in
+              Text(line).font(TBDFonts.mono(10)).foregroundStyle(TBDColor.muted).lineLimit(1).truncationMode(.tail)
+            }
+          }
+          .padding(.top, 2)
         }
-        .lineLimit(1).fixedSize()
-        .offset(x: p.rect.midX + 6, y: p.labelY)
+        .frame(width: p.labelFrame.width, alignment: .leading)
+        .offset(x: p.labelFrame.minX, y: p.labelFrame.minY)
       }
     }
     .frame(width: width, height: g.totalHeight, alignment: .topLeading)
@@ -123,9 +191,13 @@ struct AgentWallBand: View {
   private func draw(_ context: inout GraphicsContext, size: CGSize, geometry g: AgentWallGeometry, placements: [AgentWallGeometry.Placement]) {
     let wallTop = AgentWallGeometry.calloutZone
     let tile = g.tile
-    let red = context.resolve(Image(AgentWallPhoto.red.assetName))
+    // Only the photos this frame paints, from the decoded cache.
+    let cache = AgentWallPhotoCache.shared
+    let red = context.resolve(cache.image(.red))
+    var needed = Set(plan.bricks.compactMap { $0.tone.photo })
+    if selectedID != nil { needed.insert(.deep) }
     var tones: [AgentWallPhoto: GraphicsContext.ResolvedImage] = [:]
-    for photo in [AgentWallPhoto.teal, .deep, .amber] { tones[photo] = context.resolve(Image(photo.assetName)) }
+    for photo in needed where photo != .red { tones[photo] = context.resolve(cache.image(photo)) }
     // Soft contact shadow under the wall.
     let shadowTop = wallTop + wallHeight
     context.fill(
@@ -150,7 +222,7 @@ struct AgentWallBand: View {
             var tx = CGFloat(offset) - tile.width
             while tx + tile.width < rect.minX - 2 { tx += tile.width }
             layer.draw(image, in: CGRect(x: tx, y: wallTop, width: tile.width + 1, height: tile.height))
-            layer.draw(image, in: CGRect(x: tx + tile.width, y: wallTop, width: tile.width, height: tile.height))
+            layer.draw(image, in: CGRect(x: tx + tile.width, y: wallTop, width: tile.width + 1, height: tile.height))
           }
         }
         if brick.agentID == selectedID {
