@@ -135,15 +135,23 @@ public struct TBDFlowTask: Codable, Equatable, Identifiable, Sendable {
     public var looksDoneAt: Date?
     /// F4: the person answered "Not yet" at this time; the hint stays away for `TBDFlowStore.looksDoneRetry`.
     public var looksDoneDismissedAt: Date?
+    /// F4: the "Mark done on Task Board" text, frozen at the person's first tap for this task and reused on every retry
+    /// (the call is idempotent per issue, so a retry must say the same thing). nil = no tap yet. Old files load as nil.
+    public var taskBoardResult: String?
+    /// The person moved the task from done back to open at this time. The observer does not close it again in the same
+    /// session (the person wins). nil = never reopened. Old files load as nil.
+    public var reopenedAt: Date?
 
     public init(id: String, title: String, notes: String = "", subtasks: [TBDFlowSubtask] = [], status: TBDFlowTaskStatus = .todo,
                 day: String, startAt: Date? = nil, endAt: Date? = nil, source: TBDFlowTaskSource = .local,
                 taskBoardID: String? = nil, taskBoardProject: String? = nil, createdAt: Date, updatedAt: Date? = nil,
-                completedAt: Date? = nil, looksDoneAt: Date? = nil, looksDoneDismissedAt: Date? = nil) {
+                completedAt: Date? = nil, looksDoneAt: Date? = nil, looksDoneDismissedAt: Date? = nil,
+                taskBoardResult: String? = nil, reopenedAt: Date? = nil) {
         self.id = id; self.title = title; self.notes = notes; self.subtasks = subtasks; self.status = status; self.day = day
         self.startAt = startAt; self.endAt = endAt; self.source = source; self.taskBoardID = taskBoardID
         self.taskBoardProject = taskBoardProject; self.createdAt = createdAt; self.updatedAt = updatedAt ?? createdAt
         self.completedAt = completedAt; self.looksDoneAt = looksDoneAt; self.looksDoneDismissedAt = looksDoneDismissedAt
+        self.taskBoardResult = taskBoardResult; self.reopenedAt = reopenedAt
     }
 
     /// Length of the timebox in whole minutes; 0 when it has no start or no end (unknown, as in Tasklist).
@@ -303,8 +311,14 @@ public struct TBDFlowCardLabel: Codable, Equatable, Sendable {
     public var taskID: String?
     public var by: TBDFlowLabelAuthor
     public var at: Date
-    public init(cardID: String, label: TBDFlowLabel, taskID: String? = nil, by: TBDFlowLabelAuthor, at: Date) {
+    /// The time span of the card when the label was set. Companion may rebuild a card with a new id; with the span the
+    /// label finds its card again (`TBDFlowStore.reattachCardLabels`). Old files have none and load as nil.
+    public var start: Date?
+    public var end: Date?
+    public init(cardID: String, label: TBDFlowLabel, taskID: String? = nil, by: TBDFlowLabelAuthor, at: Date,
+                start: Date? = nil, end: Date? = nil) {
         self.cardID = cardID; self.label = label; self.taskID = taskID; self.by = by; self.at = at
+        self.start = start; self.end = end
     }
 }
 

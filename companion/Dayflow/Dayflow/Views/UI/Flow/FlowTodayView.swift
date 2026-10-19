@@ -57,8 +57,6 @@ struct FlowTodayView: View {
     .sheet(isPresented: $showTaskBoard) {
       FlowTaskBoardSheet(planner: planner) { status = $0 }
     }
-    // F4: ask Task Board again whenever the page opens (and the source re-checks itself every 10 minutes).
-    .task { await planner.taskBoard.recheck() }
     .confirmationDialog(
       "TBD reads your Tasklist tasks. It does not change them.", isPresented: $confirmImport, titleVisibility: .visible
     ) {

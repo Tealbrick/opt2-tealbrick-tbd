@@ -573,4 +573,90 @@ final class TBDFlowStoreTests: TBDFlowTestCase {
         XCTAssertEqual(store.cardLabels["c"], TBDFlowCardLabel(cardID: "c", label: .offPlan, taskID: nil, by: .rule, at: at("08:05:00")))
         XCTAssertThrowsError(try store.setCardLabel(cardID: "c", label: .onPlan, by: .person))
     }
+
+    // MARK: Stable card labels (review 18)
+
+    private func card(_ id: String, _ from: String, _ to: String) -> TBDFlowCardEvidence {
+        TBDFlowCardEvidence(id: id, start: at(from), end: at(to), title: "T")
+    }
+
+    func testALabelKeepsTheSpanOfItsCardAndOldFilesStillLoad() throws {
+        let store = makeStore()
+        try store.setCardLabel(cardID: "1", label: .offPlan, by: .person, cardStart: at("08:00:00"), cardEnd: at("08:30:00"))
+        let reopened = makeStore()
+        XCTAssertEqual(reopened.cardLabels["1"]?.start, at("08:00:00"))
+        XCTAssertEqual(reopened.cardLabels["1"]?.end, at("08:30:00"))
+        try Data(#"{"version":1,"cardLabels":{"9":{"cardID":"9","label":"offPlan","by":"person","at":"2026-10-05T07:00:00.000Z"}}}"#.utf8)
+            .write(to: flowURL)
+        let old = makeStore()
+        XCTAssertNotNil(old.cardLabels["9"])
+        XCTAssertNil(old.cardLabels["9"]?.start, "an old label has no span")
+    }
+
+    func testALabelWhoseCardIdIsGoneMovesToTheCardAtTheSameTime() throws {
+        let store = makeStore()
+        try store.setCardLabel(cardID: "old", label: .onPlan, taskID: "t1", by: .person, cardStart: at("08:00:00"), cardEnd: at("08:30:00"))
+        // Companion rebuilt the card: same time, new record id.
+        let moved = try store.reattachCardLabels(to: [card("new", "08:01:00", "08:30:00"), card("other", "09:00:00", "09:30:00")])
+        XCTAssertEqual(moved, 1)
+        XCTAssertNil(store.cardLabels["old"])
+        XCTAssertEqual(store.cardLabels["new"]?.label, .onPlan)
+        XCTAssertEqual(store.cardLabels["new"]?.taskID, "t1")
+        XCTAssertEqual(store.cardLabels["new"]?.by, .person)
+        XCTAssertEqual(store.cardLabels["new"]?.start, at("08:01:00"), "the span follows the new card")
+        XCTAssertNil(store.cardLabels["other"])
+        XCTAssertEqual(makeStore().cardLabels["new"]?.by, .person, "the move is saved")
+        XCTAssertEqual(try store.reattachCardLabels(to: [card("new", "08:01:00", "08:30:00")]), 0, "nothing to move twice")
+    }
+
+    func testReattachNeedsAHalfOverlapAndAKnownSpan() throws {
+        let store = makeStore()
+        try store.setCardLabel(cardID: "a", label: .offPlan, by: .person, cardStart: at("08:00:00"), cardEnd: at("08:30:00"))
+        try store.setCardLabel(cardID: "nospan", label: .rest, by: .person)
+        // 10 of 30 minutes overlap: not enough.
+        XCTAssertEqual(try store.reattachCardLabels(to: [card("n1", "08:20:00", "08:50:00"), card("n2", "10:00:00", "11:00:00")]), 0)
+        XCTAssertNotNil(store.cardLabels["a"])
+        XCTAssertNotNil(store.cardLabels["nospan"])
+        // A card three times as long that holds the old span is not the same card either.
+        XCTAssertEqual(try store.reattachCardLabels(to: [card("big", "07:00:00", "09:30:00")]), 0)
+        // 15 of 30 minutes: exactly half is enough.
+        XCTAssertEqual(try store.reattachCardLabels(to: [card("half", "08:15:00", "08:45:00")]), 1)
+        XCTAssertEqual(store.cardLabels["half"]?.label, .offPlan)
+        XCTAssertNotNil(store.cardLabels["nospan"], "a label with no span stays")
+    }
+
+    func testPersonLabelsMoveFirstAndNeverLoseToAWeakerOne() throws {
+        let store = makeStore()
+        try store.setCardLabel(cardID: "m", label: .offPlan, by: .model, cardStart: at("08:00:00"), cardEnd: at("08:30:00"))
+        try store.setCardLabel(cardID: "p", label: .rest, by: .person, cardStart: at("08:00:00"), cardEnd: at("08:30:00"))
+        XCTAssertEqual(try store.reattachCardLabels(to: [card("new", "08:00:00", "08:30:00")]), 1)
+        XCTAssertEqual(store.cardLabels["new"]?.by, .person)
+        XCTAssertEqual(store.cardLabels["new"]?.label, .rest)
+        XCTAssertNil(store.cardLabels["m"], "the weaker label is dropped, not kept on a gone card")
+        XCTAssertNil(store.cardLabels["p"])
+    }
+
+    // MARK: Reopened tasks and the frozen Task Board result
+
+    func testReopeningADoneTaskIsRemembered() throws {
+        let store = makeStore()
+        let t = try store.addTask(title: "A", day: day, startAt: at("08:00:00"))
+        try store.setStatus(id: t.id, .done)
+        XCTAssertNil(store.task(id: t.id)?.reopenedAt)
+        clock.set("2026-10-05T09:00:00Z")
+        try store.setStatus(id: t.id, .todo)
+        XCTAssertEqual(store.task(id: t.id)?.reopenedAt, at("09:00:00"))
+        XCTAssertEqual(makeStore().task(id: t.id)?.reopenedAt, at("09:00:00"), "saved")
+        let c = try store.addTask(title: "C", day: day)
+        try store.setStatus(id: c.id, .cancelled)
+        XCTAssertNil(store.task(id: c.id)?.reopenedAt)
+    }
+
+    func testTheFrozenTaskBoardResultIsSaved() throws {
+        let store = makeStore()
+        let t = try store.addTask(title: "A", day: day, source: .taskBoard, taskBoardID: "iss_1")
+        XCTAssertNil(t.taskBoardResult)
+        try store.updateTask(id: t.id) { $0.taskBoardResult = "Done — tracked in TBD Flow, 45 min on plan" }
+        XCTAssertEqual(makeStore().task(id: t.id)?.taskBoardResult, "Done — tracked in TBD Flow, 45 min on plan")
+    }
 }

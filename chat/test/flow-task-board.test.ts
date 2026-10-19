@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
 import { connectMcp, type McpTool } from "@opt2-tealbrick/bridge";
 import {
-  ISSUES_LIST_TOOL, ISSUE_COMPLETE_TOOL, TASKBOARD_MESSAGES, completeArguments, flowTaskBoardComplete, flowTaskBoardList,
+  ISSUES_LIST_TOOL, ISSUE_COMPLETE_TOOL, ISSUE_GET_TOOL, TASKBOARD_MESSAGES, completeArguments, flowTaskBoardComplete, flowTaskBoardList,
   idempotencyKey, scrubErrorText, type FlowTaskBoardDeps,
 } from "../src/main/flowTaskBoard.ts";
 import type { AgentConnection } from "../src/main/agentIdentity.ts";
@@ -152,17 +152,52 @@ describe("complete", () => {
     assert.equal(relay.calls[0].name, "kanban__issue_complete");
     assert.deepEqual(relay.calls[0].arguments, { issue: "iss_1", result: "Done — tracked in TBD Flow, 45 min on plan" });
     const key = idempotencyKey(completeArguments(input));
-    assert.match(key, /^tbd-flow-iss_1-[0-9a-f]{32}$/);
+    assert.equal(key, "tbd-flow-iss_1");
     assert.deepEqual(relay.calls[0].meta, { "tealbrick/idempotencyKey": key });
     assert.equal(relay.closed(), 1);
   });
 
-  test("same tap twice = same key; another result = another key; the key stays within 8-128 chars", () => {
+  test("the key is the issue id only: another result text is the same request; the key stays within 8-128 chars", () => {
     const a = idempotencyKey(completeArguments(input));
-    assert.equal(a, idempotencyKey(completeArguments({ ...input, result: `  ${input.result}  ` })));
-    assert.notEqual(a, idempotencyKey(completeArguments({ ...input, result: "Done — tracked in TBD Flow, 0 min on plan" })));
+    assert.equal(a, "tbd-flow-iss_1");
+    assert.equal(a, idempotencyKey(completeArguments({ ...input, result: "Done — tracked in TBD Flow, 0 min on plan" })), "a retry with other minutes keeps the key");
+    assert.notEqual(a, idempotencyKey(completeArguments({ ...input, issue: "iss_2" })));
     const long = idempotencyKey(completeArguments({ issue: "i".repeat(64), result: "x" }));
     assert.ok(long.length >= 8 && long.length <= 128);
+    assert.ok(a.length >= 8);
+  });
+
+  test("a retry with another result text sends the same key (the app freezes the text, the key never depends on it)", async () => {
+    const relay = fakeRelay([ISSUE_COMPLETE_TOOL], () => done);
+    await flowTaskBoardComplete(input, deps(relay));
+    await flowTaskBoardComplete({ ...input, result: "Done — tracked in TBD Flow, 99 min on plan" }, deps(relay));
+    assert.equal(relay.calls.length, 2);
+    assert.deepEqual(relay.calls[0].meta, relay.calls[1].meta);
+  });
+
+  test("issue_complete fails because the issue is already done: by code, by text, or by one issue_get read", async () => {
+    const byCode = fakeRelay([ISSUE_COMPLETE_TOOL], () => appError("already_done", "x"));
+    assert.deepEqual(await flowTaskBoardComplete(input, deps(byCode)), { issue: "iss_1", status: "done" });
+    const byText = fakeRelay([ISSUE_COMPLETE_TOOL], () => appError("conflict", "The issue is already done"));
+    assert.deepEqual(await flowTaskBoardComplete(input, deps(byText)), { issue: "iss_1", status: "done" });
+    assert.equal(byText.calls.length, 1, "the text was enough: no read");
+
+    const byRead = fakeRelay([ISSUE_COMPLETE_TOOL, ISSUE_GET_TOOL], (call) =>
+      call.name === ISSUE_GET_TOOL ? { content: [], structuredContent: { issue: issue("iss_1", "done") } } : appError("conflict", "no"));
+    assert.deepEqual(await flowTaskBoardComplete(input, deps(byRead)), { issue: "iss_1", status: "done" });
+    assert.deepEqual(byRead.calls.map((c) => c.name), [ISSUE_COMPLETE_TOOL, ISSUE_GET_TOOL], "one read, no second complete");
+    assert.deepEqual(byRead.calls[1].arguments, { issue: "iss_1" });
+  });
+
+  test("a failed complete on an issue that is not done stays an error (read says todo, read missing, read fails)", async () => {
+    const notDone = fakeRelay([ISSUE_COMPLETE_TOOL, ISSUE_GET_TOOL], (call) =>
+      call.name === ISSUE_GET_TOOL ? { content: [], structuredContent: { issue: issue("iss_1", "todo") } } : appError("internal", "database down"));
+    await assert.rejects(flowTaskBoardComplete(input, deps(notDone)), { message: "Task Board did not mark it done: database down" });
+    const noRead = fakeRelay([ISSUE_COMPLETE_TOOL], () => appError("internal", "database down"));
+    await assert.rejects(flowTaskBoardComplete(input, deps(noRead)), { message: "Task Board did not mark it done: database down" });
+    assert.equal(noRead.calls.length, 1);
+    const readFails = fakeRelay([ISSUE_COMPLETE_TOOL, ISSUE_GET_TOOL], (call) => (call.name === ISSUE_GET_TOOL ? appError("internal", "x") : appError("internal", "database down")));
+    await assert.rejects(flowTaskBoardComplete(input, deps(readFails)), { message: "Task Board did not mark it done: database down" });
   });
 
   test("input limits: empty issue, empty result, 4000+ characters cut", () => {

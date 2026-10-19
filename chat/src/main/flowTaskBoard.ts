@@ -15,6 +15,8 @@ import type { AgentConnection } from "./agentIdentity";
 /** `kanban__issues_list` and `kanban__issue_complete` (Task Board manifest ops, BRIDGE tool name rule). */
 export const ISSUES_LIST_TOOL = `kanban${TOOL_NAME_RULE.separator}issues_list`;
 export const ISSUE_COMPLETE_TOOL = `kanban${TOOL_NAME_RULE.separator}issue_complete`;
+/** `kanban__issue_get`: read once after a failed complete, to see whether the issue is already done. */
+export const ISSUE_GET_TOOL = `kanban${TOOL_NAME_RULE.separator}issue_get`;
 
 export const TASKBOARD_MESSAGES = {
   notConnected: "Connect TBD's agent to your workspace first (Chat › agent panel › Connect).",
@@ -202,13 +204,13 @@ export function completeArguments(input: FlowTaskBoardCompleteInput): { issue: s
 }
 
 /**
- * Deterministic idempotency key: issue id + hash of the result. A retry of the same tap (lost reply, restart,
- * approval) never completes twice. 8-128 chars (BRIDGE rule).
+ * Deterministic idempotency key: the issue id only. A retry of the same tap (lost reply, restart, approval) never
+ * completes twice, and a retry with another result text is the same request (the native side freezes the result at
+ * the first tap, so the text does not change on a retry). 8-128 chars (BRIDGE rule).
  */
-export function idempotencyKey(args: { issue: string; result: string }): string {
+export function idempotencyKey(args: { issue: string }): string {
   const id = args.issue.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 48) || "issue";
-  const hash = createHash("sha256").update(args.result).digest("hex").slice(0, 32);
-  return `tbd-flow-${id}-${hash}`;
+  return `tbd-flow-${id}`;
 }
 
 function completeResultOf(result: McpToolResult, issue: string): FlowTaskBoardCompleteResult {
@@ -218,6 +220,35 @@ function completeResultOf(result: McpToolResult, issue: string): FlowTaskBoardCo
   const status = (out.issue as { status?: unknown } | undefined)?.status;
   if (typeof status !== "string") throw new FlowTaskBoardError(TASKBOARD_MESSAGES.noStatus, "noStatus");
   return { issue, status };
+}
+
+const ALREADY_DONE = /already\s+(?:done|complete[d]?|closed)|\bissue\s+(?:is|was)\s+(?:done|complete[d]?)\b/i;
+
+/** An `issue_complete` error that says the issue is done already (by code or by text). */
+export function saysAlreadyDone(result: McpToolResult): boolean {
+  const env = result.structuredContent?.error as { code?: unknown; message?: unknown } | undefined;
+  const code = typeof env?.code === "string" ? env.code : "";
+  const text = [typeof env?.message === "string" ? env.message : "", ...(result.content ?? []).map((c) => (c.type === "text" ? c.text : ""))].join(" ");
+  return /^already_(?:done|completed|complete|closed)$/.test(code) || ALREADY_DONE.test(text);
+}
+
+/** One `issue_get` read: true when the issue's status is "done". Any failure reads as "not known to be done". */
+async function issueIsDone(client: McpClient, rpc: number, tools: { name: string }[], issue: string): Promise<boolean> {
+  if (!tools.some((t) => t.name === ISSUE_GET_TOOL)) return false;
+  try {
+    const read = await withTimeout(client.callTool(ISSUE_GET_TOOL, { issue }), rpc);
+    if (read.isError || heldOf(read)) return false;
+    return (read.structuredContent?.issue as { status?: unknown } | undefined)?.status === "done";
+  } catch {
+    return false;
+  }
+}
+
+/** The result of one `issue_complete` call; an "already done" failure counts as success. */
+async function completedOrAlreadyDone(client: McpClient, rpc: number, tools: { name: string }[], result: McpToolResult, issue: string): Promise<FlowTaskBoardCompleteResult> {
+  if (!result.isError) return completeResultOf(result, issue);
+  if (saysAlreadyDone(result) || (await issueIsDone(client, rpc, tools, issue))) return { issue, status: "done" };
+  throw errorOf(result, "mark it done");
 }
 
 export async function flowTaskBoardComplete(input: FlowTaskBoardCompleteInput, deps: FlowTaskBoardDeps): Promise<FlowTaskBoardCompleteResult> {
@@ -231,7 +262,7 @@ export async function flowTaskBoardComplete(input: FlowTaskBoardCompleteInput, d
     const call = () => withTimeout(client.callTool(ISSUE_COMPLETE_TOOL, args, meta), rpc);
     const first = await call();
     const held = heldOf(first);
-    if (!held) return completeResultOf(first, args.issue);
+    if (!held) return completedOrAlreadyDone(client, rpc, tools, first, args.issue);
 
     deps.onStatus?.(TASKBOARD_MESSAGES.waiting);
     // pollHold checks its signal only between waits; the cap answers at once and stops the poll loop.
@@ -251,6 +282,6 @@ export async function flowTaskBoardComplete(input: FlowTaskBoardCompleteInput, d
     // Approved: repeat the exact same call (same arguments, same idempotency key).
     const second = await call();
     if (heldOf(second)) throw new FlowTaskBoardError(TASKBOARD_MESSAGES.stillWaiting, "stillWaiting");
-    return completeResultOf(second, args.issue);
+    return completedOrAlreadyDone(client, rpc, tools, second, args.issue);
   });
 }

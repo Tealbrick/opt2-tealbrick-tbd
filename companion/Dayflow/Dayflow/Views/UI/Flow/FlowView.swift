@@ -65,8 +65,15 @@ struct FlowView: View {
       .frame(maxWidth: .infinity, alignment: .topLeading)
     }
     // F5: read Companion's timeline when the page opens, every minute while it is visible, and when the plan or a label changes.
-    .onAppear { dayModel.start() }
-    .onDisappear { dayModel.stop() }
+    .onAppear {
+      dayModel.start()
+      // F4: Task Board is asked when the page becomes visible and every 10 minutes while it is. Never in the background.
+      planner.taskBoard.pageDidAppear()
+    }
+    .onDisappear {
+      dayModel.stop()
+      planner.taskBoard.pageDidDisappear()
+    }
   }
 
   // MARK: Header

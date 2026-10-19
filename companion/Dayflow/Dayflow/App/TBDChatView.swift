@@ -68,6 +68,17 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     } catch { status = error.localizedDescription }
   }
 
+  /// How long the app waits for one account call. "Mark done on Task Board" gets the helper's worst case (relay open and
+  /// initialize 30 s each, list, call, hold wait 600 s, second call, one read: about 780 s) plus a margin.
+  nonisolated static func accountCallTimeoutSeconds(_ channel: String) -> Int {
+    switch channel {
+    case "flowTaskBoardComplete": return 800
+    case "awaitSignIn", "awaitAgentConnect": return 660
+    case "agentSelfTest": return 120
+    default: return 45
+    }
+  }
+
   // Native settings use the same IPC handlers and credential store as Chat.
   func accountCall(_ channel: String, args: [Any] = []) async throws -> Any {
     let allowed: Set<String> = ["session", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
@@ -84,7 +95,7 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     guard allowed.contains(channel) else { throw failure("Unsupported account operation") }
     start()
     guard ready || process?.isRunning == true else { throw failure(status) }
-    return try await hostCall(channel, args: args, timeout: .seconds(["awaitSignIn", "awaitAgentConnect", "flowTaskBoardComplete"].contains(channel) ? 660 : channel == "agentSelfTest" ? 120 : 45),
+    return try await hostCall(channel, args: args, timeout: .seconds(Self.accountCallTimeoutSeconds(channel)),
                               timeoutMessage: "Portal operation timed out. Refresh to check current state.")
   }
 

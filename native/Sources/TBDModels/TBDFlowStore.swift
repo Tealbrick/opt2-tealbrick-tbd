@@ -166,6 +166,7 @@ public final class TBDFlowStore: @unchecked Sendable {
             task.updatedAt = now
             if task.status == .done || task.status == .cancelled { task.looksDoneAt = nil }
             if task.status == .done { task.completedAt = old.status == .done ? (old.completedAt ?? now) : now } else { task.completedAt = nil }
+            if old.status == .done, task.status != .done, task.status != .cancelled { task.reopenedAt = now }
             try task.validate()
             state.tasks[index] = task
             if task.status == .done || task.status == .cancelled || task.startAt != old.startAt || task.endAt != old.endAt {
@@ -433,12 +434,51 @@ public final class TBDFlowStore: @unchecked Sendable {
     /// a `.person` label is never overwritten by `.model` or `.rule`, and a `.model` label not by `.rule`. The same
     /// author, or a higher one, replaces it. `.onPlan` needs a task id; the others drop it.
     @discardableResult
-    public func setCardLabel(cardID: String, label: TBDFlowLabel, taskID: String? = nil, by: TBDFlowLabelAuthor, at: Date? = nil) throws -> Bool {
+    public func setCardLabel(cardID: String, label: TBDFlowLabel, taskID: String? = nil, by: TBDFlowLabelAuthor, at: Date? = nil,
+                             cardStart: Date? = nil, cardEnd: Date? = nil) throws -> Bool {
         if label == .onPlan && taskID == nil { throw TBDFlowError.invalid("An on-plan label needs a task") }
         return try mutate { state, now in
             if let existing = state.cardLabels[cardID], existing.by.precedence > by.precedence { return false }
-            state.cardLabels[cardID] = TBDFlowCardLabel(cardID: cardID, label: label, taskID: label == .onPlan ? taskID : nil, by: by, at: at ?? now)
+            state.cardLabels[cardID] = TBDFlowCardLabel(cardID: cardID, label: label, taskID: label == .onPlan ? taskID : nil, by: by,
+                                                        at: at ?? now, start: cardStart, end: cardEnd)
             return true
+        }
+    }
+
+    /// A label whose card id is gone (Companion rebuilt the card) moves to the card of `cards` that covers at least half of
+    /// the longer of the two time spans. A person's label moves first, then the model's, then a rule's; a label already on
+    /// the new card stays when it is of the same or a higher author, and then the old label is dropped. A label without a
+    /// stored span, or without a matching card, stays where it is. Returns how many labels moved.
+    @discardableResult
+    public func reattachCardLabels(to cards: [TBDFlowCardEvidence]) throws -> Int {
+        try mutate { state, _ in
+            let ids = Set(cards.map(\.id))
+            let orphans = state.cardLabels.values
+                .filter { !ids.contains($0.cardID) && $0.start != nil && $0.end != nil }
+                .sorted { a, b in
+                    a.by.precedence != b.by.precedence ? a.by.precedence > b.by.precedence : (a.at != b.at ? a.at > b.at : a.cardID < b.cardID)
+                }
+            var moved = 0
+            for label in orphans {
+                guard let start = label.start, let end = label.end, end > start else { continue }
+                let best = cards.compactMap { card -> (card: TBDFlowCardEvidence, share: Double)? in
+                    let length = max(end.timeIntervalSince(start), card.end.timeIntervalSince(card.start))
+                    guard length > 0 else { return nil }
+                    let overlap = min(end, card.end).timeIntervalSince(max(start, card.start))
+                    let share = overlap / length
+                    return share >= TBDFlowMatcher.timeboxOverlapFraction ? (card, share) : nil
+                }.max { a, b in a.share != b.share ? a.share < b.share : a.card.start > b.card.start }
+                guard let target = best?.card else { continue }
+                state.cardLabels[label.cardID] = nil
+                if let existing = state.cardLabels[target.id], existing.by.precedence >= label.by.precedence { continue }
+                var attached = label
+                attached.cardID = target.id
+                attached.start = target.start
+                attached.end = target.end
+                state.cardLabels[target.id] = attached
+                moved += 1
+            }
+            return moved
         }
     }
 

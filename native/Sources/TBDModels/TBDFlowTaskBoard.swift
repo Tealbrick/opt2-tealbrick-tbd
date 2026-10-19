@@ -116,6 +116,8 @@ public enum TBDFlowSource {
     public static let notLicensedNotice = "Task list from Task Board: available with Task Board. Until then TBD keeps this list on this Mac."
     public static let installNotice = "Task list from Task Board: install Task Board in Portal. Until then TBD keeps this list on this Mac."
     public static let checkingNotice = "Checking Task Board…"
+    /// The helper's sentence for a list call that waits for the owner (same text as `listWaiting` in the Chat helper).
+    public static let listWaitingNotice = "Task Board is waiting for the owner to approve sharing your list. Check again after the owner approves."
     public static let notConnectedNotice = "Connect TBD's agent to your workspace first (Chat › agent panel › Connect)."
 
     /// The line above the plan; nil when nothing needs saying.
