@@ -44,6 +44,10 @@ final class TBDOnboardingController: ObservableObject {
   private var linkObserver: NSObjectProtocol?
   /// A design-shots preview: fixed state, no polling, no links.
   private let isPreview: Bool
+  /// The XCTest host (DayflowTests). The checks start the Chat helper, which reads its Keychain key on the main
+  /// thread; a rebuilt ad-hoc test host is not on that item's access list, so macOS asks for the login password and
+  /// the host hangs before the test runner connects (seen 2026-10-19). Tests drive the state in TBDModels instead.
+  static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
   private init(store: TBDOnboardingStore = TBDOnboardingStore(), preview: Bool = false) {
     isPreview = preview
@@ -78,7 +82,7 @@ final class TBDOnboardingController: ObservableObject {
   }
 
   func startPolling() {
-    guard poll == nil, !isPreview else { return }
+    guard poll == nil, !isPreview, !Self.isTestHost else { return }
     providers.loadRouting()
     providers.refreshCLIReadiness()
     poll = Task { [weak self] in
