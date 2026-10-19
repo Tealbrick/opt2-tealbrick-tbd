@@ -143,6 +143,8 @@ public struct TBDAgentCloudStore: @unchecked Sendable {
 public struct TBDAgentRoute: Equatable, Sendable {
     /// The harness adapter (WP-HARNESS registry in the helper). Only the Agent SDK exists today.
     public var harness: String
+    /// The model provider for a harness that offers more than one (LangChain): "anthropic" or "openai"; nil = default.
+    public var provider: String? = nil
     public var model: String
     /// Anthropic or Anthropic-compatible base URL (registry route); nil for a cloud provider. The helper derives the
     /// gateway settings from it (agent/modelEnv.ts), as before.
@@ -161,7 +163,24 @@ public extension TBDAgentModelSetup {
     /// TBD's agent's route: the cloud setting when it is active and complete, else the registry's "agent" route
     /// (which throws the "No model set" sentences). Daily's own use of the agent route stays `resolve(_:)`
     /// (Anthropic only), because Daily calls the model itself.
-    static func resolveRoute(_ registry: TBDModelRegistry, cloud: TBDAgentCloudStore = TBDAgentCloudStore()) throws -> TBDAgentRoute {
+    /// `as`: resolve as if this harness were chosen (the setup's checks of a pending choice; the setting is unchanged).
+    static func resolveRoute(_ registry: TBDModelRegistry, cloud: TBDAgentCloudStore = TBDAgentCloudStore(),
+                             harness: TBDAgentHarnessStore = TBDAgentHarnessStore(), as kind: TBDAgentHarnessKind? = nil) throws -> TBDAgentRoute {
+        if (kind ?? harness.kind) == .langchain {
+            // WP-HARNESS L3: the LangChain agent (person's own Anthropic/OpenAI key, or Ollama on this Mac).
+            if cloud.isActive { throw TBDAgentModelError.cloudNotForLangChain }
+            if harness.provider == .openai {
+                let model = harness.openAIModel
+                if model.isEmpty { throw TBDAgentModelError.openAIIncomplete("Type the OpenAI model ID.") }
+                guard let key = try harness.openAIKey(), !key.isEmpty else { throw TBDAgentModelError.openAIIncomplete("Type your OpenAI API key.") }
+                return TBDAgentRoute(harness: TBDAgentHarnessKind.langchain.rawValue, provider: "openai", model: model, baseURL: nil,
+                                     environment: [:], secrets: ["OPENAI_API_KEY": key], source: "OpenAI")
+            }
+            var route = try registryRoute(registry)
+            route.harness = TBDAgentHarnessKind.langchain.rawValue
+            route.provider = "anthropic"
+            return route
+        }
         if cloud.isActive, let setting = cloud.load() {
             let key = try cloud.key(setting.provider)
             if let missing = setting.missing(hasKey: key != nil) {
@@ -172,6 +191,11 @@ public extension TBDAgentModelSetup {
             return TBDAgentRoute(harness: TBDAgentRoute.defaultHarness, model: setting.model.trimmingCharacters(in: .whitespacesAndNewlines),
                                  baseURL: nil, environment: setting.environment, secrets: secrets, source: setting.provider.title)
         }
+        return try registryRoute(registry)
+    }
+
+    /// The registry's "agent" route (Anthropic, Anthropic-compatible, Ollama on this Mac) for the Agent SDK.
+    private static func registryRoute(_ registry: TBDModelRegistry) throws -> TBDAgentRoute {
         let config = try resolve(registry)
         let anthropic = config.baseURL.host?.lowercased() == "api.anthropic.com"
         return TBDAgentRoute(harness: TBDAgentRoute.defaultHarness, model: config.model, baseURL: config.baseURL.absoluteString,

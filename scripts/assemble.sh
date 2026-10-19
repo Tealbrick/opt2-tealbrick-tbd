@@ -29,6 +29,8 @@ tbd_assemble() {
   cp "$derived/native/release/tbd-listen" "$TBD_APP/Contents/Helpers/tbd-listen"
   cp "$root/companion/LICENSE" "$TBD_APP/Contents/Resources/Licenses/Companion-MIT.txt"
   cp "$root/chat/LICENSE" "$TBD_APP/Contents/Resources/Licenses/Chat-MIT.txt"
+  # npm packages bundled into the Chat agents (written by chat/scripts/build-tbd.ts from esbuild's metafile).
+  cp "$root/chat/out/tbd/THIRD-PARTY-NOTICES.txt" "$TBD_APP/Contents/Resources/Licenses/Chat-third-party.txt"
   cp "$root/native/LICENSE-Listening-GPL-3.0.txt" "$TBD_APP/Contents/Resources/Licenses/Listening-GPL-3.0.txt"
   cp "$root/native/NOTICE.md" "$TBD_APP/Contents/Resources/Licenses/Listening-NOTICE.md"
   # Third-party Swift package licences (FluidAudio, WhisperKit, GRDB, ...).

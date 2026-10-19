@@ -21,7 +21,7 @@ export const MODEL_PLAIN_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** The person's own model credential: one of these names only (K3: never the person token). */
-export const MODEL_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]);
+export const MODEL_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]);
 
 /** The gateway settings derived from the base URL (registry route: Anthropic, Anthropic-compatible, local Ollama). */
 function gatewayEnv(model: AgentModel): Record<string, string> {

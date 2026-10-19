@@ -18,6 +18,11 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.296",
+    "@langchain/anthropic": "1.5.12",
+    "@langchain/core": "1.2.14",
+    "@langchain/langgraph": "1.4.19",
+    "@langchain/mcp-adapters": "2.0.0",
+    "@langchain/openai": "1.6.2",
     "@opt2-tealbrick/bridge": "https://github.com/Tealbrick/opt2-tealbrick-dist/releases/download/opt2-tealbrick-bridge-bridge-v0.1.1/opt2-tealbrick-bridge-0.1.1.tgz",
     "@opt2-tealbrick/harness-claude": "https://github.com/Tealbrick/opt2-tealbrick-dist/releases/download/opt2-tealbrick-bridge-harness-claude-v0.1.0/opt2-tealbrick-harness-claude-0.1.0.tgz",
     "@opt2-tealbrick/manifest": "https://github.com/Tealbrick/opt2-tealbrick-dist/releases/download/opt2-tealbrick-sdk-manifest-v0.1.1/opt2-tealbrick-manifest-0.1.1.tgz",

@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
-import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent } from "../agent/protocol";
+import { dirname, join } from "node:path";
+import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent, SelfTestTools } from "../agent/protocol";
 import type { ContentBlock } from "../shared/message";
 
 /**
@@ -21,7 +22,7 @@ import type { ContentBlock } from "../shared/message";
  * Every harness is one adapter that turns the route the native app resolved (Settings → Models, or the setup flow)
  * into (a) the environment of the agent process and (b) the model part of its init message. The supervisor
  * (defaultAgent.ts) and the stdio protocol (agent/protocol.ts) stay the same for every harness. Only the Claude
- * Agent SDK exists today; Claude Code CLI, Codex, LangChain and Eve come later (PLAN-WP-HARNESS.md).
+ * Agent SDK and LangChain (L1) exist today; Claude Code CLI, Codex and Eve come later (PLAN-WP-HARNESS.md).
  *
  * Rules (CREDENTIALS §12, K3, C287): the agent process gets PATH/HOME/TMPDIR and the person's OWN model credential
  * only, under a name from MODEL_SECRET_NAMES; provider settings only under names from MODEL_PLAIN_NAMES. Anything else in a
@@ -35,14 +36,16 @@ export const MODEL_PLAIN_NAMES: ReadonlySet<string> = new Set([
   "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_FOUNDRY_RESOURCE",
   "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 ]);
-export const MODEL_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]);
+export const MODEL_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]);
 
 /** What the native side resolves for TBD's agent ("agentModel"). */
 export interface AgentRoute {
   /** Harness adapter id; absent = the Claude Agent SDK (earlier native builds). */
   harness?: string;
   model: string;
-  /** Anthropic or Anthropic-compatible base URL (the registry route). */
+  /** Model provider for harnesses that offer more than one (LangChain); absent = "anthropic". */
+  provider?: "anthropic" | "openai";
+  /** Anthropic or Anthropic-compatible base URL (the registry route); OpenAI-compatible for provider "openai". */
   baseUrl?: string;
   /** The person's Anthropic key (registry route); kept for the earlier shape. */
   apiKey?: string;
@@ -61,6 +64,8 @@ export interface HarnessAdapter {
   processEnv(route: AgentRoute, host: NodeJS.ProcessEnv): Record<string, string>;
   /** The model part of the init message (plain only). */
   initModel(route: AgentRoute): AgentModel;
+  /** The agent entry for this harness, given the folder of the default entry (the app's resources); absent = the default entry. */
+  entry?(resourcesDir: string): string;
 }
 
 function checked(values: Record<string, string> | undefined, allowed: ReadonlySet<string>, kind: string): Record<string, string> {
@@ -90,7 +95,34 @@ export const claudeAgentSdk: HarnessAdapter = {
   },
 };
 
-export const HARNESSES: Record<string, HarnessAdapter> = { [claudeAgentSdk.id]: claudeAgentSdk };
+/** The LangChain agent uses these two keys only (no cloud providers); any other secret name in its route is refused. */
+export const LANGCHAIN_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+
+/**
+ * The LangChain agent (WP-HARNESS L1): a small LangGraph graph in the bundled agent-langchain.mjs. The process gets
+ * PATH/HOME/TMPDIR and the person's declared model credential(s) only (Anthropic or OpenAI key). The route's provider,
+ * model and base URL go in the init message; the key never does.
+ */
+export const langchain: HarnessAdapter = {
+  id: "langchain",
+  title: "LangChain agent",
+  processEnv(route, host) {
+    const secrets = checked(route.secretEnv, LANGCHAIN_SECRET_NAMES, "secret");
+    if (!secrets.ANTHROPIC_API_KEY && route.apiKey && route.provider !== "openai") secrets.ANTHROPIC_API_KEY = route.apiKey;
+    return { PATH: "/usr/bin:/bin", HOME: host.HOME ?? "", TMPDIR: host.TMPDIR ?? "/tmp", ...secrets };
+  },
+  initModel(route) {
+    const env = checked(route.env, MODEL_PLAIN_NAMES, "provider");
+    const secretNames = Object.keys(checked(route.secretEnv, LANGCHAIN_SECRET_NAMES, "secret"));
+    return {
+      model: route.model, ...(route.provider ? { provider: route.provider } : {}), baseUrl: route.baseUrl,
+      ...(Object.keys(env).length ? { env } : {}), ...(secretNames.length ? { secretNames } : {}),
+    };
+  },
+  entry: (resourcesDir) => join(resourcesDir, "agent-langchain.mjs"),
+};
+
+export const HARNESSES: Record<string, HarnessAdapter> = { [claudeAgentSdk.id]: claudeAgentSdk, [langchain.id]: langchain };
 
 /** The adapter for a route; a harness that is not built yet is a plain sentence for Chat. */
 export function harnessFor(route: AgentRoute): HarnessAdapter {
@@ -126,7 +158,7 @@ export interface DefaultAgentDeps {
 }
 
 interface PendingTurn extends TurnCallbacks {
-  resolve(result: { sessionId: string; reply: string }): void;
+  resolve(result: { sessionId: string; reply: string; selfTest?: SelfTestTools }): void;
   reject(error: Error): void;
   sessionId: string;
 }
@@ -147,27 +179,38 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     for (const [id, t] of turns) { t.reject(new Error(message)); turns.delete(id); }
   }
 
+  /** Bumped by stop(): a start still awaiting its route or config must not spawn afterwards (orphan agent). */
+  let generation = 0;
+
   async function start(): Promise<void> {
+    const gen = generation;
     const route = await deps.model();
     // WP-HARNESS seam: the adapter builds the agent's environment and init model; refuses unknown harnesses/names.
     const harness = harnessFor(route);
     const rest = await deps.config();
     const env = harness.processEnv(route, process.env);
+    // A stopped start must not touch any state of the agent that replaced it (secretValues included).
+    if (gen !== generation) throw new Error("The agent was stopped.");
     // A provider error can quote the key; nothing the agent sends back may carry it into Chat or the helper log.
     secretValues = Object.entries(env).filter(([name]) => MODEL_SECRET_NAMES.has(name)).map(([, value]) => value);
-    const proc = (deps.spawnProcess ?? spawn)(deps.node, [deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
+    const proc = (deps.spawnProcess ?? spawn)(deps.node, [harness.entry?.(dirname(deps.entry)) ?? deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     child = proc;
     proc.stderr.on("data", () => { /* agent logs stay local; never forwarded with content */ });
     const ready = new Promise<void>((resolve, reject) => {
       const lines = createInterface({ input: proc.stdout });
       lines.on("line", (line) => {
+        // A process that stop() or restart() replaced may still talk for a moment: its lines are not for the new one.
+        if (proc !== child) return;
         let m: AgentToHelper;
         try { m = JSON.parse(line) as AgentToHelper; } catch { return; }
         if (m.type === "ready") { resolve(); return; }
         handle(m);
       });
       proc.once("exit", (code) => {
-        if (child === proc) child = null;
+        // Only the current process may fail the open turns. An old one that exits after restart() must not
+        // end a turn of the new one (stop() already ended the turns of the old one).
+        if (child !== proc) { reject(new Error("The agent was stopped.")); return; }
+        child = null;
         reject(new Error(`The agent stopped (exit ${code ?? "signal"}).`));
         failAll("The agent stopped. Send your message again.");
       });
@@ -198,7 +241,12 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else send({ type: "answer", reqId: m.reqId, answers: null });
     } else if (m.type === "done") {
       const t = turns.get(m.id);
-      if (t) { turns.delete(m.id); t.resolve({ sessionId: m.sessionId, reply: scrub(m.reply) }); }
+      if (t) {
+        turns.delete(m.id);
+        // Probe errors can quote the key like any provider error: scrubbed with the rest.
+        const selfTest = m.selfTest ? (JSON.parse(scrub(JSON.stringify(m.selfTest))) as SelfTestTools) : undefined;
+        t.resolve({ sessionId: m.sessionId, reply: scrub(m.reply), ...(selfTest ? { selfTest } : {}) });
+      }
     } else if (m.type === "error") {
       if (!m.id) return;
       const t = turns.get(m.id);
@@ -208,19 +256,44 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
 
   async function ensure(): Promise<void> {
     if (child) return;
-    if (!starting) starting = start().finally(() => { starting = null; });
+    if (!starting) {
+      const run: Promise<void> = start().finally(() => { if (starting === run) starting = null; });
+      starting = run;
+    }
     await starting;
   }
 
   return {
-    async sendTurn(input: { text: string; content?: ContentBlock[]; sessionId?: string } & TurnCallbacks): Promise<{ sessionId: string; reply: string; turnId: string }> {
+    async sendTurn(input: { text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean; onStart?(turnId: string): void } & TurnCallbacks): Promise<{ sessionId: string; reply: string; turnId: string; selfTest?: SelfTestTools }> {
       await ensure();
       const id = randomUUID();
-      const result = await new Promise<{ sessionId: string; reply: string }>((resolve, reject) => {
+      input.onStart?.(id);
+      const result = await new Promise<{ sessionId: string; reply: string; selfTest?: SelfTestTools }>((resolve, reject) => {
         turns.set(id, { ...input, resolve, reject, sessionId: input.sessionId ?? "" });
-        send({ type: "turn", id, text: input.text, content: input.content, sessionId: input.sessionId });
+        send({ type: "turn", id, text: input.text, content: input.content, sessionId: input.sessionId, ...(input.selfTest ? { selfTest: true } : {}) });
       });
       return { ...result, turnId: id };
+    },
+    /**
+     * The setup's check of the running harness (WP-HARNESS L3, the 4 checks): the agent process starts (1), its model
+     * answers (2) one round trip (3); a harness that reports them lists its tool families, each probed (4). Never
+     * throws. On a timeout the turn is cancelled. Run it on a TEMPORARY agent, never on the one Chat is using.
+     */
+    async selfTest(timeoutMs = 90_000): Promise<{ ok: boolean; reply?: string; tools?: SelfTestTools; error?: string }> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let turnId = "";
+      try {
+        const run = this.sendTurn({ text: "Reply with the single word OK.", selfTest: true, onStart: (id) => { turnId = id; }, onDelta: () => {}, onActivity: () => {} });
+        run.catch(() => {}); // after a timeout the cancelled turn ends with an error nobody awaits
+        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`The agent did not answer within ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs); });
+        const { reply, selfTest } = await Promise.race([run, timeout]);
+        return { ok: true, reply, ...(selfTest ? { tools: selfTest } : {}) };
+      } catch (error) {
+        if (turnId) this.cancel(turnId);
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
     /** The person's answers to a question (null: not answered). */
     answer(reqId: string, answers: Record<string, string> | null): void {
@@ -231,7 +304,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else for (const id of turns.keys()) send({ type: "cancel", id });
     },
     stop(): void {
-      if (!child) return;
+      generation++;
+      starting = null; // a start in flight refuses to spawn (generation); the next ensure() starts afresh
+      if (!child) { failAll("The agent was stopped."); return; }
       send({ type: "shutdown" });
       const c = child;
       child = null;
@@ -241,7 +316,13 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     /** Stop the agent process (open turns end with an error) and start it again with the current model route. */
     async restart(): Promise<void> {
       this.stop();
-      await ensure();
+      try {
+        await ensure();
+      } catch (error) {
+        // Another stop() ended this start before it spawned: the restart is still wanted; try once more.
+        if (!(error instanceof Error) || error.message !== "The agent was stopped.") throw error;
+        await ensure();
+      }
     },
     running: () => child !== null,
   };

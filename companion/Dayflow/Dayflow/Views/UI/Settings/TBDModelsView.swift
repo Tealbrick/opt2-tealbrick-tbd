@@ -45,6 +45,13 @@ struct TBDModelsView: View {
                 .font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
               // WP-HARNESS step 1: when TBD's agent uses the person's cloud provider, say so; saving the form below
               // makes the form's model TBD's agent's route again.
+              // WP-HARNESS L3: the LangChain agent uses this form's model for "Anthropic key or model on this Mac", or the
+              // person's own OpenAI key (set in Review setup).
+              if TBDAgentHarnessStore().kind == .langchain {
+                TBDNotice(TBDAgentHarnessStore().provider == .openai
+                  ? "TBD's agent is the LangChain agent on your OpenAI key. To change it, open Settings › Account › Review setup."
+                  : "TBD's agent is the LangChain agent. It uses the model below.")
+              }
               if let cloud = TBDAgentCloudStore().isActive ? TBDAgentCloudStore().load() : nil {
                 TBDNotice("TBD's agent uses \(cloud.model) on \(cloud.provider.title). To change it, open Settings › Account › Review setup. Saving a model below switches TBD's agent back to it.")
               }

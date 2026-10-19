@@ -139,6 +139,16 @@ export function registerIpc(): void {
     const model = await nativeCall("agentModelName").catch(() => null);
     return tbdAgentInfo(typeof model === "string" && model ? model : null);
   });
+  // WP-HARNESS L3: the setup's 4 checks of a harness. They run on a TEMPORARY agent that uses the route as if that
+  // harness were chosen; the agent Chat is using is never restarted or touched.
+  ipcMain.handle("studio:agentSelfTest", async (_e, harness?: string) => {
+    const probe = getServices().agentFor(typeof harness === "string" && harness ? harness : undefined);
+    try {
+      return await probe.selfTest();
+    } finally {
+      probe.stop();
+    }
+  });
   // Restart TBD's local agent process (Agent panel). It starts again with the current model route.
   ipcMain.handle("studio:restartAgent", async (_e, agentId: string) => {
     requireDefaultAgent(agentId);
