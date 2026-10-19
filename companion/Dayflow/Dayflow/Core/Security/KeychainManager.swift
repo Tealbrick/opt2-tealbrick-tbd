@@ -12,7 +12,7 @@ final class KeychainManager {
 
   static let shared = KeychainManager()
 
-  private let servicePrefix = TBDIdentity.service("com.tealbrick.tbd.companion.apikeys")
+  private let servicePrefix = TBDIdentity.keychainService("companion.apikeys")
   private let queue = DispatchQueue(label: "com.teleportlabs.dayflow.keychain", qos: .userInitiated)
 
   private init() {}

@@ -15,7 +15,7 @@ enum TBDKeychain {
     var errorDescription: String? { message }
   }
 
-  static let personService = TBDIdentity.service("tealbrick.person")
+  static let personService = TBDIdentity.keychainService("person")
 
   // MARK: person session (K3)
 

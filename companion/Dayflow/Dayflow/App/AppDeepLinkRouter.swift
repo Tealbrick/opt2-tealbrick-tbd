@@ -40,9 +40,9 @@ final class AppDeepLinkRouter {
 
   private func resolveAction(from url: URL) -> Action? {
     #if DEBUG
-      let expectedScheme = TBDIdentity.isDev ? "tealbrick-tbd-dev" : "tealbrick-tbd"
+      let expectedScheme = TBDIdentity.isDev ? "tealbrick-desktop-dev" : "tealbrick-desktop"
     #else
-      let expectedScheme = "tealbrick-tbd"
+      let expectedScheme = "tealbrick-desktop"
     #endif
     guard let scheme = url.scheme, scheme.caseInsensitiveCompare(expectedScheme) == .orderedSame else {
       return nil

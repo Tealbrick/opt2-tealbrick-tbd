@@ -7,7 +7,7 @@ import Foundation
 /// Needs the Screen & System Audio Recording permission. Delivers 16 kHz mono samples.
 public final class TBDSystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     public typealias Handler = @Sendable ([Float]) -> Void
-    private let queue = DispatchQueue(label: "com.tealbrick.tbd.system-audio", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.tealbrick.desktop.system-audio", qos: .userInitiated)
     private let lock = NSLock()
     private var stream: SCStream?
     private var handler: Handler?

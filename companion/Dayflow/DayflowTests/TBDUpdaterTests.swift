@@ -1,3 +1,4 @@
+import TBDModels
 import XCTest
 
 @testable import TBD
@@ -95,10 +96,17 @@ final class TBDUpdaterTests: XCTestCase {
     XCTAssertNil(TBDUpdateVerifier.requirement(teamID: ""))
   }
 
+  /// C284: updates are for TBD v2's own bundle id only.
+  func testRequirementNamesTheV2BundleID() {
+    let req = TBDUpdateVerifier.requirement(teamID: "ABCDE12345") ?? ""
+    XCTAssertTrue(req.contains("identifier \"com.tealbrick.desktop\""), req)
+    XCTAssertFalse(req.contains(TBDIdentity.archivedV1BundleID + "\""), req)
+  }
+
   // MARK: dev to dev updates (C68a)
 
   /// Info.plist of a build. `release` nil = a bundle from before TBDReleaseVersion existed.
-  private func info(short: String = "0.1.0", release: String?, id: String = "com.tealbrick.tbd")
+  private func info(short: String = "0.1.0", release: String?, id: String = TBDIdentity.liveBundleID)
     -> [String: Any]
   {
     var d: [String: Any] = ["CFBundleIdentifier": id, "CFBundleShortVersionString": short]
@@ -181,6 +189,10 @@ final class TBDUpdaterTests: XCTestCase {
     XCTAssertThrowsError(
       try TBDUpdateVerifier.checkBundleIsNewer(
         newInfo: info(release: "0.9.0", id: "com.example.other"), currentInfo: info(release: "0.1.0")))
+    // The archived v1 app is not an update for TBD v2 (C284).
+    XCTAssertThrowsError(
+      try TBDUpdateVerifier.checkBundleIsNewer(
+        newInfo: info(release: "0.9.0", id: TBDIdentity.archivedV1BundleID), currentInfo: info(release: "0.1.0")))
     XCTAssertThrowsError(
       try TBDUpdateVerifier.checkBundleIsNewer(newInfo: nil, currentInfo: info(release: "0.1.0")))
     XCTAssertThrowsError(

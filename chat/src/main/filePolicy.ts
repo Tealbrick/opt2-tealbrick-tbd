@@ -24,6 +24,8 @@ export interface PolicyContext {
   allowed: readonly string[];
   /** TBD's own data folder (denied except the workspace inside it). */
   tbdData: string;
+  /** The archived v1 TBD folders (C284: reference only): always denied, no exception. */
+  archived?: readonly string[];
 }
 
 const SECRET_DIRS = [
@@ -57,6 +59,7 @@ export const within = (p: string, root: string): boolean => p === root || p.star
 
 export function isSecret(path: string, ctx: PolicyContext): string | null {
   if (within(path, ctx.tbdData) && !within(path, ctx.workspace)) return "TBD's own data";
+  for (const a of ctx.archived ?? []) if (within(path, a)) return "the archived v1 TBD data";
   for (const d of SECRET_DIRS) if (within(path, join(ctx.home, d))) return d;
   for (const f of SECRET_FILES) if (path === join(ctx.home, f)) return f;
   for (const part of path.split(sep)) for (const re of SECRET_NAMES) if (re.test(part)) return part;
@@ -85,7 +88,7 @@ export function targetPaths(tool: string, input: Record<string, unknown>, ctx: P
 export function commandMentionsSecret(command: string, ctx: PolicyContext): string | null {
   // Whole protected paths, also when they contain spaces (quoted or escaped).
   const flat = command.replace(/\\ /g, " ");
-  for (const d of [ctx.tbdData, ...SECRET_DIRS.map((x) => join(ctx.home, x)), ...SECRET_FILES.map((x) => join(ctx.home, x))]) {
+  for (const d of [ctx.tbdData, ...(ctx.archived ?? []), ...SECRET_DIRS.map((x) => join(ctx.home, x)), ...SECRET_FILES.map((x) => join(ctx.home, x))]) {
     if (flat.includes(d) || flat.includes(d.replace(ctx.home, "~")) || flat.includes(d.replace(ctx.home, "$HOME"))) return d.replace(ctx.home, "~");
   }
   for (const token of command.split(/[\s'"=;|&<>()]+/)) {
@@ -126,7 +129,7 @@ export function sandboxSettings(ctx: PolicyContext): Record<string, unknown> {
     allowUnsandboxedCommands: false,
     filesystem: {
       allowWrite: [ctx.workspace, ...ctx.allowed],
-      denyRead: [...SECRET_DIRS.map((d) => join(ctx.home, d)), ...SECRET_FILES.map((f) => join(ctx.home, f)), ctx.tbdData],
+      denyRead: [...SECRET_DIRS.map((d) => join(ctx.home, d)), ...SECRET_FILES.map((f) => join(ctx.home, f)), ctx.tbdData, ...(ctx.archived ?? [])],
     },
   };
 }

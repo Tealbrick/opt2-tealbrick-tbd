@@ -1,7 +1,7 @@
 #!/bin/bash
-# The owner's own TBD.app (C150): the Release configuration with the production identity (com.tealbrick.tbd, the
+# The owner's own TBD.app (C150): the Release configuration with the production identity (com.tealbrick.desktop, the
 # person's real data), assembled like release.sh and signed with a local identity (or ad hoc with TBD_SIGN_IDENTITY=-).
-# The Debug configuration is "TBD Dev" (com.tealbrick.tbd.dev, its own data) for development and screenshots only;
+# The Debug configuration is "TBD Dev" (com.tealbrick.desktop.dev, its own data) for development and screenshots only;
 # build it from Xcode or xcodebuild, never with this script. Build output is deleted with --clean.
 set -euo pipefail
 TBD_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

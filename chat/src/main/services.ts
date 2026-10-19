@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { APP_DATA_FOLDER, ARCHIVED_V1_FOLDERS, appSupport } from "./appIdentity";
 import { saveAttachmentIn } from "./attachmentFile";
 import { app, nativeCall } from "../tbd/host";
 import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
@@ -81,7 +82,8 @@ export const keychainSigner: AgentSigner = {
 /** The agent's own working folder (SEC-04): TBD-owned, outside TBD's data, created 0700. */
 export function agentWorkspace(): string {
   // TBD_AGENT_WORKSPACE is set only by the DEBUG dev host (TBD Dev); the live app never sets it.
-  const dir = process.env.TBD_AGENT_WORKSPACE || join(homedir(), "Library", "Application Support", "TBD Agent", "Workspace");
+  // The host sets TBD_AGENT_WORKSPACE (<app data>/Agent/Workspace, C284); the fallback is the same live location.
+  const dir = process.env.TBD_AGENT_WORKSPACE || join(appSupport(), APP_DATA_FOLDER, "Agent", "Workspace");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return realPath(dir);
 }
@@ -101,7 +103,15 @@ function saveFolders(list: string[]): void {
 }
 export function policyContext(): PolicyContext {
   const home = realPath(homedir());
-  return { home, workspace: agentWorkspace(), allowed: agentFolders().map((f) => realPath(f)), tbdData: realPath(join(home, "Library", "Application Support", "TBD")) };
+  // TBD's own data = the parent of TBD_CHAT_DATA (<app data>/Chat); the archived v1 folders are denied too (C284).
+  const data = process.env.TBD_CHAT_DATA ? dirname(process.env.TBD_CHAT_DATA) : join(appSupport(), APP_DATA_FOLDER);
+  return {
+    home,
+    workspace: agentWorkspace(),
+    allowed: agentFolders().map((f) => realPath(f)),
+    tbdData: realPath(data),
+    archived: ARCHIVED_V1_FOLDERS.map((f) => realPath(join(appSupport(), f))),
+  };
 }
 /** Grant a folder; refuses the home folder itself, the root, and protected locations. */
 export function addAgentFolder(path: string): string[] {

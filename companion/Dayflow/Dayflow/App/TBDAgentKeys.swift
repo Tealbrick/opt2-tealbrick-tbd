@@ -10,7 +10,7 @@ import TBDModels
 /// `tealbrick.agent.<con>` as the spec names it. The Chat helper can ask for the public JWK and for
 /// signatures over agent assertions; it never receives the private key.
 enum TBDAgentKeys {
-  static let servicePrefix = TBDIdentity.service("tealbrick.agent") + "."
+  static let servicePrefix = TBDIdentity.keychainService("agent") + "."
   static let account = "k4"
 
   struct Failure: LocalizedError {

@@ -461,13 +461,13 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd.dev;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop.dev;
 				PRODUCT_NAME = TBD;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TBD_DISPLAY_NAME = "TBD Dev";
-				TBD_URL_SCHEME = "tealbrick-tbd-dev";
+				TBD_URL_SCHEME = "tealbrick-desktop-dev";
 			};
 			name = Debug;
 		};
@@ -499,7 +499,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop;
 				PRODUCT_NAME = TBD;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -517,7 +517,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.1;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
@@ -535,7 +535,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.1;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
@@ -551,7 +551,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
@@ -567,7 +567,7 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;

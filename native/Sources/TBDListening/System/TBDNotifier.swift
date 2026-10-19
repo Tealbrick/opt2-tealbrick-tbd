@@ -30,7 +30,7 @@ final class TBDNotifier {
     private let center: () -> TBDNotificationCenter
     private let isAppActive: @MainActor () -> Bool
     private let chime: @MainActor () -> Void
-    private let log = Logger(subsystem: "com.tealbrick.tbd", category: "Notifications")
+    private let log = Logger(subsystem: "com.tealbrick.desktop", category: "Notifications")
 
     init(center: @escaping () -> TBDNotificationCenter = { TBDSystemNotificationCenter() },
          isAppActive: @escaping @MainActor () -> Bool = { NSApp.isActive },

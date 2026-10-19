@@ -35,13 +35,13 @@ final class AgentBridgeServer {
   static var socketPath: String {
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return appSupport.appendingPathComponent(TBDIdentity.folder("TBD") + "/Companion/agent.sock").path
+    return appSupport.appendingPathComponent(TBDIdentity.dataFolder + "/Companion/agent.sock").path
   }
 
   private static var writeLogPath: String {
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return appSupport.appendingPathComponent(TBDIdentity.folder("TBD") + "/Companion/agent-writes.log").path
+    return appSupport.appendingPathComponent(TBDIdentity.dataFolder + "/Companion/agent-writes.log").path
   }
 
   // MARK: - Lifecycle

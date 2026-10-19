@@ -2,14 +2,14 @@
 //  TBDDesignShotsMode.swift
 //  TBD Dev only (DEBUG): `--design-shots <outDir>` renders companion screens to PNG and quits.
 //
-//  Usage (Debug build, bundle id com.tealbrick.tbd.dev):
+//  Usage (Debug build, bundle id com.tealbrick.desktop.dev):
 //    "<TBD Dev build>/TBD.app/Contents/MacOS/TBD" --design-shots <outDir>
 //  Writes <outDir>/tbd-companion-<screen>-<light|dark>.png (2x) and <outDir>/tbd-companion-contrast.json, then exits
 //  (0 = no contrast failures, 1 = contrast failures, 2 = refused / bad arguments).
 //
 //  Runs from DayflowApp.init, before any scene or the AppDelegate starts: no capture, no hotkeys, no login item, no
 //  updater, no sign-in, no Chat helper (TBDChatRuntime refuses to start), no notifications. Data: a fresh demo root
-//  ~/Library/Application Support/TBD-dev-shots (TBDIdentity.folder), seeded with neutral demo cards and deleted at the
+//  ~/Library/Application Support/<dataFolder>-dev-shots (TBDIdentity.dataFolder), seeded with neutral demo cards and deleted at the
 //  end. Refuses unless the process is the dev identity, so it can never open the live TBD data.
 //
 //  The offscreen render and the rendered contrast audit follow native/Sources/TBDDesignShots/main.swift (same method,
@@ -57,7 +57,7 @@
     /// A fresh demo data root for this run only (Application Support/TBD-dev-shots, Dayflow-dev-shots).
     private static func prepareDemoRoots() throws -> [URL] {
       let fm = FileManager.default
-      let roots = [TBDIdentity.applicationSupport("TBD"), TBDIdentity.applicationSupport("Dayflow")]
+      let roots = [TBDIdentity.applicationSupport()]
       for root in roots {
         // Belt and braces: only ever delete the shots roots.
         guard root.lastPathComponent.hasSuffix("-dev-shots") else {

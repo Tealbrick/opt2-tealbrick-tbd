@@ -15,8 +15,8 @@
 	<true/>
 	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
 	<array>
-		<string>com.tealbrick.tbd-spks</string>
-		<string>com.tealbrick.tbd-spki</string>
+		<string>com.tealbrick.desktop-spks</string>
+		<string>com.tealbrick.desktop-spki</string>
 	</array>
 
 	<!-- Hardened-runtime resource access the app actually uses. -->

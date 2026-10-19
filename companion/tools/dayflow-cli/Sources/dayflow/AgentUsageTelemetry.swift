@@ -54,7 +54,7 @@ enum AgentUsageTelemetry {
 
   private static var appSupportDirectory: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("TBD/Companion", isDirectory: true)
+      .appendingPathComponent(tbdAppDataFolder + "/Companion", isDirectory: true)
   }
 
   private static var queueURL: URL {

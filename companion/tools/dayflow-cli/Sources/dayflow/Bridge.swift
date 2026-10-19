@@ -20,11 +20,11 @@ enum AgentBridge {
   static var socketPath: String {
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return appSupport.appendingPathComponent("TBD/Companion/agent.sock").path
+    return appSupport.appendingPathComponent(tbdAppDataFolder + "/Companion/agent.sock").path
   }
 
   static var editsEnabled: Bool {
-    UserDefaults(suiteName: "com.tealbrick.tbd")?
+    UserDefaults(suiteName: tbdAppDefaultsDomain)?
       .bool(forKey: "agentEditsEnabled") ?? false
   }
 

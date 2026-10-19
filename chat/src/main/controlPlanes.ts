@@ -1,3 +1,4 @@
+import { APP_DATA_FOLDER } from "./appIdentity";
 import { app } from "../tbd/host";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { COMPANY_CONTROL_PLANE, createControlPlaneProfile, normalizeIssuer, prof
 
 // Import before any store initializes. Each control plane gets its own
 // credentials, device ID and history. The host passes TBD_CHAT_DATA.
-const baseUserData = app.commandLine.getSwitchValue("user-data-dir") || join(app.getPath("appData"), "TBD", "Chat");
+const baseUserData = app.commandLine.getSwitchValue("user-data-dir") || join(app.getPath("appData"), APP_DATA_FOLDER, "Chat");
 const registryPath = join(baseUserData, "control-planes.json");
 let state: ControlPlaneState;
 try {

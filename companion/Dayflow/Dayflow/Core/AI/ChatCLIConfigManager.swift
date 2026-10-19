@@ -14,7 +14,7 @@ struct ChatCLIConfigManager {
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask
     ).first!
-    workingDirectory = appSupport.appendingPathComponent(TBDIdentity.folder("TBD") + "/Companion/chatcli", isDirectory: true)
+    workingDirectory = appSupport.appendingPathComponent(TBDIdentity.dataFolder + "/Companion/chatcli", isDirectory: true)
   }
 
   func ensureWorkingDirectory() {

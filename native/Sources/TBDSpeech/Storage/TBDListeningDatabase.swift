@@ -139,7 +139,7 @@ public final class TBDListeningDatabase: @unchecked Sendable {
                 t.column("createdAt", .datetime).notNull()
             }
         }
-        // One row per completed import of an earlier library (see `TBDLegacyImport`).
+        // Unused since C284 (TBD v2 never imports the v1 library); the table stays so the schema migrations stay append-only.
         migrator.registerMigration("v5-legacy-import") { db in
             try db.create(table: "legacyImport") { t in
                 t.primaryKey("source", .text)

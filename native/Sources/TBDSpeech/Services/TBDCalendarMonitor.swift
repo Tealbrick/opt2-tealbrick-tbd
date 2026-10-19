@@ -20,7 +20,7 @@ public final class TBDCalendarMonitor: @unchecked Sendable {
     private let store = EKEventStore()
     private var timer: DispatchSourceTimer?
     private var notified: [String: Set<String>] = [:]
-    private let queue = DispatchQueue(label: "com.tealbrick.tbd.calendar")
+    private let queue = DispatchQueue(label: "com.tealbrick.desktop.calendar")
     public var onEvent: (@Sendable (Event) -> Void)?
 
     public init() {}

@@ -98,6 +98,27 @@ test("sign-out revokes at Portal with the K3 and clears the local copy; a 401 re
   } finally { await portal.close(); }
 });
 
+test("C7: a session past its local idle mark stays signed in while Portal accepts it; a 401 still ends it", async () => {
+  let accept = true;
+  const portal = await fakePortal((req, _b, res) => {
+    if (req.url?.startsWith("/api/v1/workspaces")) return accept ? json(res, 200, { items: [], nextCursor: null }) : err(res, 401, "unauthenticated");
+    err(res, 404, "not_found");
+  });
+  const store = memoryStore();
+  // 25 h ago Portal said "idle until +24 h"; Core has slid the window since (src/http/auth.ts:99-109).
+  store.save({ token: "tbo_old", sessionId: "osn_old", expiresAt: Date.now() - 3_600_000, email: null });
+  const p = createPortal({ origin: portal.origin, store, machineLabel: "m" });
+  try {
+    assert.ok(p.session(), "no local sign-out on the idle mark");
+    await p.workspaces();
+    assert.equal(portal.seen.at(-1)?.auth, "Bearer tbo_old");
+    assert.ok(store.load(), "still signed in after a successful call");
+    accept = false;
+    await assert.rejects(p.workspaces(), (e: any) => e.status === 401);
+    assert.equal(store.load(), null, "Portal's 401 ends the session");
+  } finally { await portal.close(); }
+});
+
 test("pending holds are counts per app from instances.list", async () => {
   const portal = await fakePortal((req, _b, res) => {
     if (req.url === "/api/v1/workspaces/ws_1/instances") return json(res, 200, { items: [{ product: "knowledge", pendingHolds: 0 }, { product: "connect", pendingHolds: 2 }] });
