@@ -232,7 +232,9 @@ final class TBDOnboardingController: ObservableObject {
       } else if let testKey = TBDAgentModelSetup.testKey(provider: provider, endpoint: TBDAgentModelSetup.anthropicEndpoint, typed: key, registry: registry) {
         result = await TBDAgentModelSetup.test(endpoint: TBDAgentModelSetup.anthropicEndpoint, apiKey: testKey, model: model)
       } else {
-        result = .badKey
+        agentTest = "Type your Anthropic API key first."
+        agentTesting = false
+        return
       }
       if result.isOK {
         do {
