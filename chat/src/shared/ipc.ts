@@ -84,8 +84,33 @@ export interface AgentProfile {
 // Must match LOCAL_ACTIONS in main/localExec.ts, which is the enforcement side.
 // "local-mcp" was missing here, so the renderer's type claimed an action it can
 // actually receive was impossible — a lie directly under a permission boundary.
-export type LocalAction = "run-command" | "read-file" | "write-file" | "list-directory" | "local-mcp";
+export type LocalAction = "run-command" | "read-file" | "write-file" | "list-directory" | "local-mcp" | "connect-call";
 export type LocalPermission = "always" | "ask" | "never";
+
+/** What the Connect consent card shows (C11): built in the helper from the call's arguments, never from the model's own words. */
+export interface ConnectCard {
+  title: string;
+  service: string;
+  tool: string;
+  /** The account label the agent named, or "(default account)". */
+  account: string;
+  accountLine: string;
+  effect: string;
+  effectLine: string;
+  /** Every target argument that is present (who or where it goes); a list shows its count and its items (to ten). */
+  target: { label: string; value: string }[];
+  subject?: string;
+  /** The first 300 characters of the content. */
+  content?: string;
+  /** "Attachments: 2 files: a.pdf, b.txt", when the call names files. */
+  attachments?: string;
+  /** "Other arguments: key=value; …" (at most 600 characters): every argument shown nowhere else. */
+  other?: string;
+  /** Whether "Always allow" is offered (effect write or outward, not a first-contact tool). Approve, Deny and Never allow always are. */
+  alwaysOffered: boolean;
+  /** The line under the buttons: the Always hint, or "TBD asks every time for this kind of action." */
+  hint: string;
+}
 
 /** One pending request for something on this machine, awaiting the user. */
 export interface LocalAsk {
@@ -96,6 +121,12 @@ export interface LocalAsk {
   detail: string;
   /** Set when "always" would add this folder to the agent's allow-list; absent = one-time consent only. */
   folder?: string | null;
+  /**
+   * Set for a Connect call (action "connect-call"): the card has Approve / Deny / Never allow, and Always allow when `connect.alwaysOffered`.
+   * They arrive in `localAnswer` as `{ allow, remember }`: Approve = allow, no remember; Deny = no allow, no remember;
+   * Always allow = allow + remember; Never allow = no allow + remember.
+   */
+  connect?: ConnectCard;
 }
 
 /**
@@ -216,6 +247,8 @@ export interface StudioApi {
     handler: (payload: { streamId: string; label: string | null }) => void,
   ): () => void;
   onCursor(handler: (payload: { streamId: string; index: number }) => void): () => void;
+  /** A Connect call of the turn waits for the owner's approval; `url` opens the approval in the system browser (null: none). */
+  onHeld(handler: (payload: { streamId: string; label: string; holdId: string; url: string | null }) => void): () => void;
   onAuthorization(
     handler: (payload: {
       streamId: string;

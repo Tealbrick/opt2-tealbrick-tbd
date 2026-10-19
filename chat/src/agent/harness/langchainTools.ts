@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { AIMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import { z } from "zod";
 import type { ListeningToolDef } from "../listeningDefs";
-import type { AgentQuestion, AgentToHelper, SelfTestTools } from "../protocol";
+import type { AgentQuestion, AgentToHelper, ConnectAsk, SelfTestTools } from "../protocol";
 import type { ChatModelLike, GraphState, ToolSeam } from "./langchainGraph";
 
 /**
@@ -44,17 +44,29 @@ export interface PermissionPolicy {
   needsPermission(tool: string): boolean;
   /** protocol.describeToolCall: one line for the consent card. */
   describe(tool: string, input: Record<string, unknown>): string;
+  /**
+   * Connect consent (main/connectConsent.ts `routeOf`): the ask for ANY Connect call (free ones are marked), else undefined.
+   * Such a call goes to the helper even though `needsPermission` passes the Teal Brick tools: the helper checks the person's Never rules first.
+   */
+  connect?(tool: string, input: Record<string, unknown>): ConnectAsk | undefined;
 }
 
 export interface Decision { allow: boolean; message?: string }
+
+/** Request ids of one agent process (the same shape as agent/requestIds.ts, which the Agent SDK agent uses): `<nonce>:p3`. */
+export interface RequestIds { permission(): string; question(): string }
+function processRequestIds(nonce = randomBytes(6).toString("hex")): RequestIds {
+  let next = 0;
+  return { permission: () => `${nonce}:p${++next}`, question: () => `${nonce}:q${++next}` };
+}
 
 /**
  * The agent's side of `permission_request` / `permission` and `question` / `answer`: sends the request for a turn and
  * waits for the helper's reply. A stopped turn answers "no" / "not answered". Replies come in through `onPermission`
  * and `onAnswer`.
  */
-export function createInteractions(send: (m: AgentToHelper) => void, policy: PermissionPolicy) {
-  let next = 0;
+export function createInteractions(send: (m: AgentToHelper) => void, policy: PermissionPolicy, ids: RequestIds = processRequestIds()) {
+  // Request ids carry a random nonce of this process, so a replacement process never matches an answer meant for this one.
   const permissions = new Map<string, (d: Decision) => void>();
   const answers = new Map<string, (a: Record<string, string> | null) => void>();
   const wait = <T>(map: Map<string, (v: T) => void>, reqId: string, signal: AbortSignal | undefined, onAbort: T): Promise<T> =>
@@ -66,14 +78,20 @@ export function createInteractions(send: (m: AgentToHelper) => void, policy: Per
   return {
     /** Decide one tool call: free when `needsPermission` says so, else the person decides on the consent card. */
     async gate(turnId: string, name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<Decision> {
-      if (!policy.needsPermission(name)) return { allow: true };
-      const reqId = `p${++next}`;
-      send({ type: "permission_request", id: turnId, reqId, tool: name, detail: policy.describe(name, input), input });
-      return wait(permissions, reqId, signal, { allow: false, message: "Turn stopped." });
+      try {
+        const connect = policy.connect?.(name, input);
+        if (!connect && !policy.needsPermission(name)) return { allow: true };
+        const reqId = ids.permission();
+        send({ type: "permission_request", id: turnId, reqId, tool: name, detail: policy.describe(name, input), input, ...(connect ? { connect } : {}) });
+        return await wait(permissions, reqId, signal, { allow: false, message: "Turn stopped." });
+      } catch {
+        // Fail closed: a call that cannot be classified or sent to the helper does not run.
+        return { allow: false, message: "TBD could not check this action with you, so it did not run." };
+      }
     },
     /** Ask the person; `null` = not answered (declined, stopped, timed out). */
     async ask(turnId: string, questions: AgentQuestion[], signal?: AbortSignal): Promise<Record<string, string> | null> {
-      const reqId = `q${++next}`;
+      const reqId = ids.question();
       send({ type: "question", id: turnId, reqId, questions });
       return wait(answers, reqId, signal, null);
     },
@@ -116,6 +134,8 @@ export interface SeamOptions {
   ungated?: ReadonlySet<string>;
   /** Called when a tool call throws; lets the owner drop an MCP server whose connection is gone. */
   onToolError?(name: string, error: unknown): void;
+  /** Called with every tool result (before it is cut): Connect consent learns tool effects and holds from it. */
+  observe?(name: string, input: Record<string, unknown>, result: ToolMessage): void;
 }
 
 const failed = (id: string, name: string, text: string) => new ToolMessage({ tool_call_id: id, name, content: capText(text), status: "error" });
@@ -150,7 +170,9 @@ export function createToolSeam(options: SeamOptions): ToolSeam {
         }
         try {
           const result = await found.invoke({ id, name: call.name, args, type: "tool_call" }, config);
-          messages.push(capped(ToolMessage.isInstance(result) ? result : new ToolMessage({ tool_call_id: id, name: call.name, content: typeof result === "string" ? result : JSON.stringify(result) })));
+          const message = ToolMessage.isInstance(result) ? result : new ToolMessage({ tool_call_id: id, name: call.name, content: typeof result === "string" ? result : JSON.stringify(result) });
+          try { options.observe?.(call.name, args, message); } catch { /* an observer never stops a tool result */ }
+          messages.push(capped(message));
         } catch (error) {
           if (config.signal?.aborted) break; // the turn was stopped; the graph ends it
           options.onToolError?.(call.name, error);

@@ -1,15 +1,18 @@
 import { portalWorkspaces, selectPortalWorkspace, scopedStateName, selectedPortalWorkspace } from "./portalWorkspaces";
 import { app, BrowserWindow, Notification, ipcMain, nativeCall, shell, type WebContents } from "../tbd/host";
-import { activateControlPlane, addControlPlane, controlPlanes, removeControlPlane } from "./controlPlanes";
+import { activateControlPlane, addControlPlane, controlPlanes, currentControlPlane, removeControlPlane } from "./controlPlanes";
 import { assertPlaneSwitchAllowed } from "./controlPlaneProfiles";
 import type { RemoteAgent } from "../shared/ipc";
 import { loadState, pickFolder, saveState } from "./store";
 import { localFileExists, openLocalFile, openRemoteFile, revealLocalFile, saveRemoteFile } from "./deliveredFile";
 import { answerAsk } from "./asks";
-import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, ensurePerson, getServices, removeAgentFolder, resetServices, saveAttachment } from "./services";
+import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, consentStore, consentWorkspace, ensurePerson, getServices, removeAgentFolder, resetServices, saveAttachment } from "./services";
 import { connectMcp } from "@opt2-tealbrick/bridge";
 import { knowledgeSave, type KnowledgeSaveInput } from "./knowledgeSave";
 import { flowTaskBoardComplete, flowTaskBoardList } from "./flowTaskBoard";
+import { connectAccounts } from "./connectAccounts";
+import { consentListing, workspaceKey } from "./connectConsent";
+import { holdLink, holdProduct } from "./connectHold";
 import { dialog } from "../tbd/host";
 import { publicPersonSession } from "./portal";
 import { DEFAULT_AGENT_ID } from "./defaultAgent";
@@ -232,6 +235,30 @@ export function registerIpc(): void {
     });
   }));
 
+  // Connectors (C280 C11): the accounts Connect lets TBD's agent use. A read through the agent identity and the relay
+  // (connectAccounts.ts); the native side combines it with the `connect` entitlement. Never a person-op call.
+  ipcMain.handle("studio:connectAccounts", withPerson(async () => {
+    if (!signedIn()) throw new Error("Sign in to Teal Brick in TBD first.");
+    return connectAccounts(taskBoardDeps());
+  }));
+  // The person's "Always allow" / "Never allow" choices (Settings › Connectors). Local file only (connect-consent.json); no Portal, no
+  // relay, so they list whether or not TBD's agent is connected: the workspace of the agent when it is connected, else the workspace
+  // that is selected. The answer is `{ choices, unreadable }`: `unreadable` is true when the file could not be read and TBD kept a copy.
+  const consentKey = (): string | null => {
+    const connected = consentWorkspace();
+    if (connected) return connected;
+    try { return workspaceKey(currentControlPlane().issuer, selectedPortalWorkspace()); } catch { return null; }
+  };
+  const consentRules = () => consentListing(consentStore(), consentKey());
+  ipcMain.handle("studio:connectConsentList", () => consentRules());
+  ipcMain.handle("studio:connectConsentRevoke", (_e, raw: unknown) => {
+    const r = (raw ?? {}) as Record<string, unknown>;
+    if (typeof r.account !== "string" || typeof r.tool !== "string") throw new Error("Choose the account and the tool to forget.");
+    const ws = consentKey();
+    if (ws) consentStore().revoke(ws, r.account, r.tool);
+    return consentRules();
+  });
+
   // Approvals: counts only (S2/C24); the hold pages open in the system browser.
   ipcMain.handle("studio:pendingHolds", withPerson(async () => {
     try { return await getServices().portal.pendingHolds(selectedPortalWorkspace()); } catch { return []; }
@@ -286,6 +313,16 @@ export function registerIpc(): void {
   const turns = createTurnRouter({
     agent: () => getServices().agent,
     emit: (streamId, channel, payload) => { if (sendTo && !sendTo.isDestroyed()) sendTo.send(channel, { streamId, ...payload }); },
+    // "Open approval" for a held call of any app (C4), in the workspace the agent is connected to: Inbox's holds overview when Operator
+    // Inbox is unlocked there, Connect's hold page for a Connect hold, else the Portal workspace home. https only; no link when the
+    // agent is not connected. A Portal link; it opens in the system browser.
+    holdUrl: (held) => {
+      const c = getServices().agentIdentity.connection();
+      if (!c) return null;
+      const snapshot = getServices().entitlements.current();
+      const inboxUnlocked = snapshot.ws === c.workspaceId && snapshot.apps.inbox.access === "unlocked";
+      return holdLink({ issuer: currentControlPlane().issuer, ws: c.workspaceId, holdId: held.holdId, inboxUnlocked, product: holdProduct(held.tool) });
+    },
   });
 
   ipcMain.handle(

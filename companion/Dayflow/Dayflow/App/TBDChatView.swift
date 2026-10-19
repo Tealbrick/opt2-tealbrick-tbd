@@ -73,6 +73,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
   nonisolated static func accountCallTimeoutSeconds(_ channel: String) -> Int {
     switch channel {
     case "flowTaskBoardComplete": return 800
+    // Relay open, initialize, list and call: 30 s each at worst, plus a margin.
+    case "connectAccounts": return 140
     case "awaitSignIn", "awaitAgentConnect": return 660
     case "agentSelfTest": return 120
     default: return 45
@@ -88,6 +90,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect",
       // Flow's Task Board source (F4): the owner's open issues, and "done" after the person's tap (TBD's agent, never the person's token).
       "flowTaskBoardList", "flowTaskBoardComplete",
+      // Connectors (C11): the accounts Connect lets TBD's agent use (a read as TBD's own agent), and the person's Always/Never rules (local file).
+      "connectAccounts", "connectConsentList", "connectConsentRevoke",
       // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
       "restartAgent",
       // WP-HARNESS L3: the setup's 4 checks of TBD's agent with the chosen harness.

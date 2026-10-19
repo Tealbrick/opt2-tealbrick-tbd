@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent, SelfTestTools } from "../agent/protocol";
+import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, ConnectAsk, HelperToAgent, SelfTestTools } from "../agent/protocol";
 import type { ContentBlock } from "../shared/message";
 
 /**
@@ -141,6 +141,8 @@ export interface TurnCallbacks {
   onTurn?(turn: { sessionId: string; turnId?: string }): void;
   /** The agent asks the person (AskUserQuestion); answer with `answer(reqId, …)`. */
   onQuestion?(question: { reqId: string; questions: AgentQuestion[] }): void;
+  /** A Connect call of this turn is waiting for the owner's approval (the Chat shows a link). */
+  onHeld?(held: { tool: string; holdId: string; expiresAt: string }): void;
 }
 
 export interface DefaultAgentDeps {
@@ -151,8 +153,13 @@ export interface DefaultAgentDeps {
   model(): Promise<AgentRoute>;
   /** Everything else the agent needs; no credentials. */
   config(): Promise<Omit<AgentConfig, "model">>;
-  /** Decide one tool call (file policy + person consent, SEC-04); message is shown to the agent on deny. */
-  permission(req: { tool: string; detail: string; input: Record<string, unknown> }): Promise<{ allow: boolean; message?: string }>;
+  /**
+   * Decide one tool call (file policy + person consent, SEC-04); message is shown to the agent on deny.
+   * `connect` is set for a Connect call (C11): the person's Always/Never rules or the Connect card decide it.
+   * `remember` tells the agent which standing choice decided ("always" / "never").
+   * `signal` aborts when the agent process that asked is stopped or replaced: the implementation closes its card as denied.
+   */
+  permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }>;
   /** For tests: spawn replacement. */
   spawnProcess?: typeof spawn;
 }
@@ -167,6 +174,21 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
   let child: ChildProcessWithoutNullStreams | null = null;
   let starting: Promise<void> | null = null;
   const turns = new Map<string, PendingTurn>();
+  /**
+   * Which agent process asked what. A reply (a permission decision, a question's answer) goes only to the process that
+   * asked: its ids are random per process, and this map keeps the process too (`epoch`, one number per spawned process), so
+   * a reply for a process that was stopped or replaced is dropped even if the new process uses the same id.
+   */
+  let epoch = 0;
+  let currentEpoch = 0;
+  const openPermissions = new Set<{ epoch: number; abort: AbortController }>();
+  const openQuestions = new Map<string, number>();
+  /** The old process is gone: its open cards close as denied, and its questions can no longer be answered. */
+  function closeOpenRequests(): void {
+    for (const entry of openPermissions) entry.abort.abort();
+    openPermissions.clear();
+    openQuestions.clear();
+  }
 
   const send = (m: HelperToAgent) => child?.stdin.write(`${JSON.stringify(m)}\n`);
   /** The person's model credential values of the running agent: scrubbed from every text that comes back. A key
@@ -195,6 +217,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     secretValues = Object.entries(env).filter(([name]) => MODEL_SECRET_NAMES.has(name)).map(([, value]) => value);
     const proc = (deps.spawnProcess ?? spawn)(deps.node, [harness.entry?.(dirname(deps.entry)) ?? deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     child = proc;
+    closeOpenRequests(); // nothing of an earlier process is still open for this one
+    const procEpoch = ++epoch;
+    currentEpoch = procEpoch;
     proc.stderr.on("data", () => { /* agent logs stay local; never forwarded with content */ });
     const ready = new Promise<void>((resolve, reject) => {
       const lines = createInterface({ input: proc.stdout });
@@ -204,13 +229,14 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
         let m: AgentToHelper;
         try { m = JSON.parse(line) as AgentToHelper; } catch { return; }
         if (m.type === "ready") { resolve(); return; }
-        handle(m);
+        handle(m, procEpoch);
       });
       proc.once("exit", (code) => {
         // Only the current process may fail the open turns. An old one that exits after restart() must not
         // end a turn of the new one (stop() already ended the turns of the old one).
         if (child !== proc) { reject(new Error("The agent was stopped.")); return; }
         child = null;
+        closeOpenRequests();
         reject(new Error(`The agent stopped (exit ${code ?? "signal"}).`));
         failAll("The agent stopped. Send your message again.");
       });
@@ -220,7 +246,7 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     await ready;
   }
 
-  function handle(m: AgentToHelper): void {
+  function handle(m: AgentToHelper, from: number): void {
     if (m.type === "event") {
       const t = turns.get(m.id);
       if (!t) return;
@@ -229,16 +255,26 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else if (e.kind === "reset") t.onReset?.();
       else if (e.kind === "activity") t.onActivity(e.label === null ? null : scrub(e.label));
       else if (e.kind === "session") { t.sessionId = e.sessionId; t.onTurn?.({ sessionId: e.sessionId, turnId: m.id }); }
+      else if (e.kind === "held" && typeof e.holdId === "string" && typeof e.expiresAt === "string") t.onHeld?.({ tool: String(e.tool), holdId: e.holdId, expiresAt: e.expiresAt });
     } else if (m.type === "permission_request") {
       // The consent card shows detail and input: scrubbed like every other text from the agent.
       const input = JSON.parse(scrub(JSON.stringify(m.input ?? {}))) as Record<string, unknown>;
-      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input })
-        .then((d) => send({ type: "permission", reqId: m.reqId, allow: d.allow, message: d.message }))
-        .catch(() => send({ type: "permission", reqId: m.reqId, allow: false }));
+      const open = { epoch: from, abort: new AbortController() };
+      openPermissions.add(open);
+      // The decision goes back only while the process that asked is still the running one.
+      const reply = (message: HelperToAgent): void => {
+        if (!openPermissions.delete(open) || from !== currentEpoch) return;
+        send(message);
+      };
+      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input, ...(m.connect ? { connect: m.connect } : {}) }, open.abort.signal)
+        .then((d) => reply({ type: "permission", reqId: m.reqId, allow: d.allow, message: d.message, ...(d.remember ? { remember: d.remember } : {}) }))
+        .catch(() => reply({ type: "permission", reqId: m.reqId, allow: false }));
     } else if (m.type === "question") {
       const t = turns.get(m.id);
-      if (t?.onQuestion) t.onQuestion({ reqId: m.reqId, questions: JSON.parse(scrub(JSON.stringify(m.questions ?? []))) as AgentQuestion[] });
-      else send({ type: "answer", reqId: m.reqId, answers: null });
+      if (t?.onQuestion) {
+        openQuestions.set(m.reqId, from);
+        t.onQuestion({ reqId: m.reqId, questions: JSON.parse(scrub(JSON.stringify(m.questions ?? []))) as AgentQuestion[] });
+      } else send({ type: "answer", reqId: m.reqId, answers: null });
     } else if (m.type === "done") {
       const t = turns.get(m.id);
       if (t) {
@@ -297,6 +333,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     },
     /** The person's answers to a question (null: not answered). */
     answer(reqId: string, answers: Record<string, string> | null): void {
+      // Only the process that asked gets the answer; for a stopped or replaced process there is nobody to tell.
+      if (openQuestions.get(reqId) !== currentEpoch) return;
+      openQuestions.delete(reqId);
       send({ type: "answer", reqId, answers });
     },
     cancel(turnId?: string): void {
@@ -306,6 +345,7 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     stop(): void {
       generation++;
       starting = null; // a start in flight refuses to spawn (generation); the next ensure() starts afresh
+      closeOpenRequests();
       if (!child) { failAll("The agent was stopped."); return; }
       send({ type: "shutdown" });
       const c = child;

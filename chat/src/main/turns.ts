@@ -60,6 +60,8 @@ interface Group {
 export interface TurnRouterDeps {
   agent(): Pick<DefaultAgent, "sendTurn" | "answer">;
   emit: Emit;
+  /** The "Open approval" link for a held Connect call, or null when none can be built (not connected). */
+  holdUrl?(held: { tool: string; holdId: string; expiresAt: string }): string | null;
   /** Default: one hour. */
   questionTimeoutMs?: number;
 }
@@ -107,6 +109,7 @@ export function createTurnRouter(deps: TurnRouterDeps) {
         onDelta: (text) => emit("studio:delta", { text }),
         onReset: () => emit("studio:reset", {}),
         onActivity: (label) => emit("studio:activity", { label }),
+        onHeld: (held) => emit("studio:held", { label: "Waiting for owner approval", holdId: held.holdId, url: deps.holdUrl?.(held) ?? null }),
         onTurn: (turn) => { run.sessionId = turn.sessionId; emit("studio:turn", turn); },
         onQuestion: ({ reqId, questions }) => {
           const group: Group = {

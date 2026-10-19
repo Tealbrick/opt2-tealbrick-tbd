@@ -13,6 +13,8 @@ import { createEntitlements, type Entitlements } from "./entitlements";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
 import { createDefaultAgent, type AgentRoute, type DefaultAgent, type DefaultAgentDeps } from "./defaultAgent";
 import { askPerson } from "./asks";
+import { connectOp, createConsentStore, decideConnectCall, workspaceKey, type ConsentStore } from "./connectConsent";
+import type { ConnectAsk } from "../agent/protocol";
 import { startSignerSocket } from "./signerSocket";
 import { relayLaunch, type RelayLaunch } from "./relayLaunch";
 import type { Server } from "node:net";
@@ -136,13 +138,37 @@ export function removeAgentFolder(path: string): string[] {
   return agentFolders();
 }
 
+/**
+ * Connect consent (C280 C11): the person's "Always allow" / "Never allow" choices, per workspace, account and tool, in the
+ * helper's state folder. Mode 0600; account labels and tool names only.
+ */
+export function consentStore(): ConsentStore {
+  return createConsentStore(join(dataDir(), "connect-consent.json"));
+}
+
+/** The rules key of the workspace TBD's agent is connected to (where its Connect calls go), or null when it is not connected. */
+export function consentWorkspace(): string | null {
+  const c = getServices().agentIdentity.connection();
+  return c ? workspaceKey(currentControlPlane().issuer, c.workspaceId) : null;
+}
+
+/** One Connect call: the person's rules first, else the Connect card (Approve / Deny / Always allow / Never allow). */
+async function connectPermission(req: { tool: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
+  return decideConnectCall(req, {
+    store: consentStore(),
+    workspace: consentWorkspace(),
+    askPerson: (card) => askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "connect-call", label: card.title, detail: "", connect: card }, signal),
+  });
+}
+
 /** One tool call: policy first, the person only when needed (SEC-04). */
-async function permission(req: { tool: string; detail: string; input: Record<string, unknown> }): Promise<{ allow: boolean; message?: string }> {
+async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
+  if (req.connect || connectOp(req.tool) !== null) return connectPermission(req, signal);
   const ctx = policyContext();
   const verdict = decide(req.tool, req.input, ctx);
   if (verdict.kind === "allow") return { allow: true };
   if (verdict.kind === "deny") return { allow: false, message: verdict.reason };
-  const answer = await askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "run-command", label: req.tool, detail: req.detail, folder: verdict.folder });
+  const answer = await askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "run-command", label: req.tool, detail: req.detail, folder: verdict.folder }, signal);
   if (answer.allow && answer.remember && verdict.folder) {
     try { addAgentFolder(verdict.folder); } catch { /* refused folder: still allowed once */ }
   }

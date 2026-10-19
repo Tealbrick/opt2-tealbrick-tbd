@@ -73,6 +73,8 @@ export type Block =
       speaker?: { id: string; name: string; accent: string };
     }
   | { kind: "peer-activity"; id: string; at: number; events: PeerEvent[] }
+  /** A Connect call waits for the owner's approval (C4): "Waiting for owner approval" with an "Open approval" link. */
+  | { kind: "hold"; id: string; at: number; label: string; holdId: string; url?: string }
   | {
       kind: "authorization";
       id: string;
