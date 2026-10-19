@@ -31,6 +31,12 @@ final class TBDOnboardingController: ObservableObject {
   @Published private(set) var pairCode = ""
   @Published private(set) var pairing = false
   @Published private(set) var pairError = ""
+  /// Ollama on this Mac: status for the agent's model (after a test) and for the Companion's recommended model.
+  @Published private(set) var agentLocalStatus: TBDAgentModelSetup.LocalStatus?
+  @Published private(set) var companionLocalStatus: TBDAgentModelSetup.LocalStatus?
+  let downloads = TBDLocalModelDownload.shared
+  /// The Companion's recommended local model (Qwen3-VL 4B, the preset the Settings upgrade sheet uses).
+  let companionLocalModel = LocalModelPreset.recommended.modelId(for: .ollama)
   // Step 3: set once the person asked macOS for Screen recording in this run; then the relaunch button shows.
   @Published private(set) var screenRequested = false
 
@@ -152,6 +158,10 @@ final class TBDOnboardingController: ObservableObject {
     let companion = companionModel()
     c.companionModelReady = companion != nil
     c.companionModelName = companion
+    c.companionDownload = downloads.progress[companionLocalModel]
+    if step == .models && !c.companionModelReady {
+      companionLocalStatus = await TBDAgentModelSetup.localStatus(model: companionLocalModel)
+    }
     c.speechModelOnDisk = speech.ready
     c.capturePaused = UserDefaults.standard.bool(forKey: TBDOnboardingStore.legacyDoneKey) && !AppState.shared.isRecording
     c.speechDownload = speech.progress
@@ -176,7 +186,7 @@ final class TBDOnboardingController: ObservableObject {
   /// TBD Dev `--design-shots`: the flow at `step` with fixed choices and checks. Its record lives in a throwaway
   /// suite (cleared first), never in the person's defaults.
   static func preview(step: TBDOnboardingStep, choices: TBDOnboardingChoices, checks: TBDOnboardingChecks,
-                      screenRequested: Bool = false) -> TBDOnboardingController {
+                      screenRequested: Bool = false, companionLocal: TBDAgentModelSetup.LocalStatus? = nil) -> TBDOnboardingController {
     let suite = TBDIdentity.devBundleID + ".onboarding-shots"
     UserDefaults.standard.removePersistentDomain(forName: suite)
     let store = TBDOnboardingStore(defaults: UserDefaults(suiteName: suite)!)
@@ -184,6 +194,7 @@ final class TBDOnboardingController: ObservableObject {
     let flow = TBDOnboardingController(store: store, preview: true)
     flow.checks = checks
     flow.screenRequested = screenRequested
+    flow.companionLocalStatus = companionLocal
     if let name = checks.agentModelName { flow.agentModel = name }
     return flow
   }
@@ -260,7 +271,9 @@ final class TBDOnboardingController: ObservableObject {
       let provider: TBDAgentProvider = runtime == .local ? .ollama : .anthropic
       let result: TBDAgentModelTestResult
       if provider == .ollama {
-        result = TBDAgentModelSetup.testResult(await TBDAgentModelSetup.localStatus(model: model))
+        let status = await TBDAgentModelSetup.localStatus(model: model)
+        agentLocalStatus = status
+        result = TBDAgentModelSetup.testResult(status)
       } else if let testKey = TBDAgentModelSetup.testKey(provider: provider, endpoint: TBDAgentModelSetup.anthropicEndpoint, typed: key, registry: registry) {
         result = await TBDAgentModelSetup.test(endpoint: TBDAgentModelSetup.anthropicEndpoint, apiKey: testKey, model: model)
       } else {
@@ -355,6 +368,29 @@ final class TBDOnboardingController: ObservableObject {
     relaunching = false
   }
 
+  // MARK: Downloads into Ollama (dev.10)
+
+  /// TBD's agent model is missing in Ollama: download it, then test and save.
+  func downloadAgentModel() {
+    let model = agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+    downloads.pull(model) { [weak self] in self?.testAgent() }
+  }
+
+  /// The Companion's recommended model: download it into Ollama (or use it when it is there) and make it the
+  /// Companion's model, as the Settings upgrade sheet does.
+  func useCompanionLocalModel() {
+    machine.update { $0.companion = .yes; $0.companionRuntime = .local }
+    let model = companionLocalModel
+    let configure: @MainActor () -> Void = { [weak self] in
+      guard let self else { return }
+      self.providers.loadRouting()
+      self.providers.handleUpgradeSuccess(engine: .ollama, baseURL: LocalEngine.ollama.defaultBaseURL, modelId: model, apiKey: "")
+      self.providers.assignPrimaryProvider(.local)
+      Task { await self.refreshChecks() }
+    }
+    if companionLocalStatus == .ready { configure() } else { downloads.pull(model, done: configure) }
+  }
+
   // MARK: Step 4: models
 
   func setUpCompanion(_ provider: LLMProviderID) {
@@ -371,6 +407,7 @@ struct TBDOnboardingView: View {
   @ObservedObject private var permissions = TBDPermissions.shared
   @ObservedObject private var speech = TBDSpeechModelSetup.shared
   @ObservedObject private var providers: ProvidersSettingsViewModel
+  @ObservedObject private var downloads = TBDLocalModelDownload.shared
 
   @MainActor init() { self.init(flow: .shared) }
 
@@ -596,6 +633,18 @@ struct TBDOnboardingView: View {
           Text(message).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
         }
       }
+      // dev.10: the model is missing in Ollama: download it here (it continues in the background).
+      let agentModelName = flow.agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+      if flow.agentRuntime == .local, let p = downloads.progress[agentModelName] {
+        progress(p)
+        Text("Downloading \(agentModelName): \(Int((p * 100).rounded()))% · you can go on, it continues in the background")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+      } else if flow.agentRuntime == .local, case .modelMissing = flow.agentLocalStatus {
+        Button("Download \(agentModelName)") { flow.downloadAgentModel() }.buttonStyle(TBDButtonStyle(.primary))
+      }
+      if flow.agentRuntime == .local, let error = downloads.errors[agentModelName] {
+        Text(error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
+      }
     }
   }
 
@@ -711,8 +760,9 @@ struct TBDOnboardingView: View {
         segment("Gemini", selected: false) { flow.setUpCompanion(.gemini) }
         segment("OpenAI-compatible", selected: false) { flow.setUpCompanion(.openAICompatible) }
       }
+      if !flow.checks.companionModelReady { panel { companionLocalPanel } }
       fieldRow("On this Mac") {
-        segment("Ollama or LM Studio", selected: false) { flow.setUpCompanion(.local) }
+        segment("Other local model (LM Studio, Ollama)", selected: false) { flow.setUpCompanion(.local) }
       }
       Text("You sign in to a CLI yourself, in that CLI. TBD never sees or stores its login.")
         .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
@@ -738,6 +788,36 @@ struct TBDOnboardingView: View {
           }
           if let error = speech.error { Text(error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink) }
         }
+      }
+    }
+  }
+
+  /// dev.10: the recommended local model for the Companion, downloaded into Ollama from here.
+  private var companionLocalPanel: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s3) {
+      HStack(spacing: TBDKit.s3) {
+        Text("Qwen3-VL 4B on this Mac").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink)
+        Text("free · works offline · about 3.3 GB · uses Ollama").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+        Spacer(minLength: 0)
+        if let _ = downloads.progress[flow.companionLocalModel] {
+          TBDTag("Downloading", status: .busy)
+        } else if flow.companionLocalStatus == .notRunning {
+          Button("Check again") { Task { await flow.refreshChecks() } }.buttonStyle(TBDButtonStyle(.quiet))
+        } else if flow.companionLocalStatus != nil {
+          Button(flow.companionLocalStatus == .ready ? "Use it" : "Download") { flow.useCompanionLocalModel() }
+            .buttonStyle(TBDButtonStyle(.secondary))
+        }
+      }
+      if let p = downloads.progress[flow.companionLocalModel] {
+        progress(p)
+        Text("\(Int((p * 100).rounded()))% · you can go on, it continues in the background")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+      } else if flow.companionLocalStatus == .notRunning {
+        Text("Ollama is not running on this Mac. Install it from ollama.com and open it, then push \"Check again\".")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+      }
+      if let error = downloads.errors[flow.companionLocalModel] {
+        Text(error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
       }
     }
   }
@@ -794,9 +874,12 @@ struct TBDOnboardingView: View {
         }
       }
       .buttonStyle(TBDButtonStyle(line.on ? .quiet : .secondary))
+      // VoiceOver says the action and the area ("Sign in, Workspace"); the line's text stays its own element
+      // (a combined element hid the action word, dev.9 follow-up 1).
+      .accessibilityLabel("\(line.action), \(line.area)")
     }
     .padding(.horizontal, TBDKit.s4).padding(.vertical, TBDKit.s2)
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
   }
 
   // MARK: Shared pieces

@@ -400,6 +400,8 @@ private enum OnboardingShots {
                                  checks: .init(granted: [.microphone, .notifications]), screenRequested: true)),
       ("4-models", .preview(step: .models, choices: .init(portal: .no, agent: .no),
                             checks: .init(granted: all, companionModelReady: true, companionModelName: "qwen3-vl:4b"))),
+      ("4-models-local", .preview(step: .models, choices: .init(portal: .no, agent: .no),
+                                  checks: .init(granted: all), companionLocal: .modelMissing("qwen3-vl:4b"))),
       ("5-summary-all-on", .preview(step: .summary, choices: .init(portal: .yes, agent: .yes), checks: allOn)),
       ("5-summary-some-skipped", .preview(step: .summary, choices: .init(portal: .yes, agent: .no), checks: some)),
     ]
