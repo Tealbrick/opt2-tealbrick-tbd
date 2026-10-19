@@ -57,7 +57,9 @@ export interface AgentQuestion {
 export type HelperToAgent =
   | { type: "init"; config: AgentConfig }
   /** `content` carries attached files (Anthropic content blocks, text first); `text` alone otherwise. */
-  | { type: "turn"; id: string; text: string; content?: ContentBlock[]; sessionId?: string }
+  /** `selfTest`: the setup's check (WP-HARNESS L3): one throwaway exchange, no session saved; a harness that can
+   *  report its loaded tool families answers `reply` as JSON `{ reply, tools }`. */
+  | { type: "turn"; id: string; text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean }
   | { type: "cancel"; id: string }
   | { type: "permission"; reqId: string; allow: boolean; message?: string }
   /** The person's answers, keyed by question text; null = not answered (declined, stopped, timed out). */

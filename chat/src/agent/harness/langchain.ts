@@ -1,13 +1,14 @@
 // Must stay the first import: it switches LangChain tracing off before any LangChain module loads.
 import "./tracingOff";
 import { createInterface } from "node:readline";
+import type { BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { describeToolCall, needsPermission, type AgentConfig, type AgentToHelper, type HelperToAgent } from "../protocol";
 import type { ContentBlock } from "../../shared/message";
 import { LISTENING_TOOLS, listeningFailure } from "../listeningDefs";
 import { runTurn } from "./langchainGraph";
 import { createChatModel } from "./langchainModels";
-import { fileSessionStore } from "./langchainSessions";
+import { fileSessionStore, type SessionStore } from "./langchainSessions";
 import { ASK_PERSON, askPersonTool, createInteractions, createToolSeam, listeningTools, loadMcpServer, type LoadedTools, type McpServerSpec } from "./langchainTools";
 
 /**
@@ -66,7 +67,10 @@ const SYSTEM = [
   `When you need a choice or a fact only the person has, use ${ASK_PERSON}. You have no shell, file or web tools.`,
 ].join("\n");
 
-async function turn(id: string, text: string, sessionId?: string, content?: ContentBlock[]): Promise<void> {
+/** The self-test's throwaway history: nothing is written to the person's sessions. */
+const scratch = (): SessionStore => { const m = new Map<string, BaseMessage[]>(); return { load: (k) => m.get(k) ?? null, save: (k, v) => { m.set(k, v); } }; };
+
+async function turn(id: string, text: string, sessionId?: string, content?: ContentBlock[], selfTest = false): Promise<void> {
   if (!config) { out({ type: "error", id, message: "Agent is not initialised." }); return; }
   const abort = new AbortController();
   turns.set(id, abort);
@@ -82,7 +86,7 @@ async function turn(id: string, text: string, sessionId?: string, content?: Cont
       model, provider, sessionId, text, content,
       tools: createToolSeam({ tools, gate: (name, input, signal) => interactions.gate(id, name, input, signal), ungated: new Set([ASK_PERSON]) }),
       system: [SYSTEM, config.systemAppend ?? ""].filter(Boolean).join("\n"),
-      store: fileSessionStore(config.stateDir),
+      store: selfTest ? scratch() : fileSessionStore(config.stateDir),
       signal: abort.signal,
       hooks: {
         onSession: (s) => out({ type: "event", id, event: { kind: "session", sessionId: s } }),
@@ -92,7 +96,8 @@ async function turn(id: string, text: string, sessionId?: string, content?: Cont
       },
     });
     out({ type: "event", id, event: { kind: "activity", label: null } });
-    out({ type: "done", id, sessionId: result.sessionId, reply: result.reply });
+    const families = [...mcp.keys(), ...(config.listeningCli ? ["listening"] : []), "ask_person"];
+    out({ type: "done", id, sessionId: result.sessionId, reply: selfTest ? JSON.stringify({ reply: result.reply, tools: families }) : result.reply });
   } catch (error) {
     out({ type: "event", id, event: { kind: "activity", label: null } });
     out({ type: "error", id, message: abort.signal.aborted ? "Stopped." : scrub(error instanceof Error ? error.message : String(error)) });
@@ -107,7 +112,7 @@ lines.on("line", (line) => {
   try { m = JSON.parse(line) as HelperToAgent; } catch { return; }
   switch (m.type) {
     case "init": config = m.config; out({ type: "ready" }); break;
-    case "turn": void turn(m.id, m.text, m.sessionId, m.content); break;
+    case "turn": void turn(m.id, m.text, m.selfTest ? undefined : m.sessionId, m.content, m.selfTest === true); break;
     case "cancel": turns.get(m.id)?.abort(); break;
     case "permission": interactions.onPermission(m); break;
     case "answer": interactions.onAnswer(m); break;

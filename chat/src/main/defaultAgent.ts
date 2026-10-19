@@ -176,7 +176,11 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     for (const [id, t] of turns) { t.reject(new Error(message)); turns.delete(id); }
   }
 
+  /** Bumped by stop(): a start still awaiting its route or config must not spawn afterwards (orphan agent). */
+  let generation = 0;
+
   async function start(): Promise<void> {
+    const gen = generation;
     const route = await deps.model();
     // WP-HARNESS seam: the adapter builds the agent's environment and init model; refuses unknown harnesses/names.
     const harness = harnessFor(route);
@@ -184,6 +188,7 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     const env = harness.processEnv(route, process.env);
     // A provider error can quote the key; nothing the agent sends back may carry it into Chat or the helper log.
     secretValues = Object.entries(env).filter(([name]) => MODEL_SECRET_NAMES.has(name)).map(([, value]) => value);
+    if (gen !== generation) throw new Error("The agent was stopped.");
     const proc = (deps.spawnProcess ?? spawn)(deps.node, [harness.entry?.(dirname(deps.entry)) ?? deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     child = proc;
     proc.stderr.on("data", () => { /* agent logs stay local; never forwarded with content */ });
@@ -237,19 +242,43 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
 
   async function ensure(): Promise<void> {
     if (child) return;
-    if (!starting) starting = start().finally(() => { starting = null; });
+    if (!starting) {
+      const run: Promise<void> = start().finally(() => { if (starting === run) starting = null; });
+      starting = run;
+    }
     await starting;
   }
 
   return {
-    async sendTurn(input: { text: string; content?: ContentBlock[]; sessionId?: string } & TurnCallbacks): Promise<{ sessionId: string; reply: string; turnId: string }> {
+    async sendTurn(input: { text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean } & TurnCallbacks): Promise<{ sessionId: string; reply: string; turnId: string }> {
       await ensure();
       const id = randomUUID();
       const result = await new Promise<{ sessionId: string; reply: string }>((resolve, reject) => {
         turns.set(id, { ...input, resolve, reject, sessionId: input.sessionId ?? "" });
-        send({ type: "turn", id, text: input.text, content: input.content, sessionId: input.sessionId });
+        send({ type: "turn", id, text: input.text, content: input.content, sessionId: input.sessionId, ...(input.selfTest ? { selfTest: true } : {}) });
       });
       return { ...result, turnId: id };
+    },
+    /**
+     * The setup's check of the running harness (WP-HARNESS L3, the 4 checks): the agent process starts (1), its model
+     * answers (2) one round trip (3); a harness that reports them lists its tool families (4). Never throws.
+     */
+    async selfTest(timeoutMs = 90_000): Promise<{ ok: boolean; reply?: string; tools?: string[]; error?: string }> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const run = this.sendTurn({ text: "Reply with the single word OK.", selfTest: true, onDelta: () => {}, onActivity: () => {} });
+        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("The agent did not answer within 90 seconds.")), timeoutMs); });
+        const { reply } = await Promise.race([run, timeout]);
+        try {
+          const parsed = JSON.parse(reply) as { reply?: unknown; tools?: unknown };
+          if (typeof parsed.reply === "string" && Array.isArray(parsed.tools)) return { ok: true, reply: parsed.reply, tools: parsed.tools.map(String) };
+        } catch { /* a harness without the self-test shape: the reply itself */ }
+        return { ok: true, reply };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
     /** The person's answers to a question (null: not answered). */
     answer(reqId: string, answers: Record<string, string> | null): void {
@@ -260,7 +289,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else for (const id of turns.keys()) send({ type: "cancel", id });
     },
     stop(): void {
-      if (!child) return;
+      generation++;
+      starting = null; // a start in flight refuses to spawn (generation); the next ensure() starts afresh
+      if (!child) { failAll("The agent was stopped."); return; }
       send({ type: "shutdown" });
       const c = child;
       child = null;

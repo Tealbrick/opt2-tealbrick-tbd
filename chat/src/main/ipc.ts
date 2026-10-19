@@ -140,6 +140,11 @@ export function registerIpc(): void {
     return tbdAgentInfo(typeof model === "string" && model ? model : null);
   });
   // Restart TBD's local agent process (Agent panel). It starts again with the current model route.
+  // WP-HARNESS L3: the setup's 4 checks of TBD's agent with the chosen harness (restart, then one round trip).
+  ipcMain.handle("studio:agentSelfTest", async () => {
+    await getServices().agent.restart();
+    return getServices().agent.selfTest();
+  });
   ipcMain.handle("studio:restartAgent", async (_e, agentId: string) => {
     requireDefaultAgent(agentId);
     await getServices().agent.restart();

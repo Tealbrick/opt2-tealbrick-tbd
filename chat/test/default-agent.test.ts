@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { createDefaultAgent } from "../src/main/defaultAgent.ts";
 
 const entry = fileURLToPath(new URL("./fixtures/fake-agent.ts", import.meta.url));
@@ -91,4 +92,23 @@ test("attached files cross to the agent process as content blocks", async () => 
     const r = await agent.sendTurn({ text: "look", content, onDelta: () => {}, onActivity: () => {} });
     assert.deepEqual(JSON.parse(r.reply), content);
   } finally { agent.stop(); }
+});
+
+test("stop() while the agent is still starting leaves no orphan process (L3 fix)", async () => {
+  let release: () => void = () => {};
+  let spawned = 0;
+  const agent = createDefaultAgent({
+    node: process.execPath, entry,
+    model: async () => { await new Promise<void>((r) => { release = r; }); return { model: "m", apiKey: "sk-test" }; },
+    config: async () => ({ cwd: "/tmp", stateDir: "/tmp/tbd-agent-test" }),
+    permission: async () => ({ allow: true }),
+    spawnProcess: ((...args: Parameters<typeof spawn>) => { spawned++; return spawn(...args); }) as typeof spawn,
+  });
+  const turn = agent.sendTurn({ text: "hi", onDelta: () => {}, onActivity: () => {} }).catch((e: Error) => e.message);
+  await new Promise((r) => setTimeout(r, 20));
+  agent.stop();
+  release();
+  assert.equal(await turn, "The agent was stopped.");
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(spawned, 0, "no process was started after stop()");
 });
