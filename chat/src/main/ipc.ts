@@ -84,6 +84,12 @@ export function registerIpc(): void {
   ipcMain.handle("studio:activateControlPlane", async (_e, id: string) => { requireSignedOut(); activateControlPlane(id); resetServices(); });
   ipcMain.handle("studio:addControlPlane", async (_e, input: { name: string; issuer: string }) => { requireSignedOut(); addControlPlane(input); resetServices(); });
   ipcMain.handle("studio:removeControlPlane", (_e, id: string) => { requireSignedOut(); return removeControlPlane(id); });
+  // C282: what the selected workspace paid for (cached; re-read when asked with refresh, or when older than 10 min).
+  ipcMain.handle("studio:entitlements", withPerson(async (_e: unknown, opts?: { refresh?: boolean }) => {
+    const ent = getServices().entitlements;
+    const ws = selectedPortalWorkspace() || null;
+    return opts?.refresh || ent.isStale(ws) ? ent.refresh(ws) : ent.current();
+  }));
   ipcMain.handle("studio:session", withPerson(async () => {
     const s = publicPersonSession(getServices().portal.session());
     return s ? { expiresAt: s.expiresAt, email: s.email ?? undefined } : null;

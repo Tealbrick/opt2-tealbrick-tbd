@@ -70,7 +70,7 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
 
   // Native settings use the same IPC handlers and credential store as Chat.
   func accountCall(_ channel: String, args: [Any] = []) async throws -> Any {
-    let allowed: Set<String> = ["session", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
+    let allowed: Set<String> = ["session", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
       // Read-only: agent directory (TBD agent) and the verified update feed for the native updater.
       "listAgents", "checkUpdate",
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
@@ -131,6 +131,10 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     let inherited = ProcessInfo.processInfo.environment
     var env: [String: String] = ["TBD_CHAT_DATA": data.path, "HOME": inherited["HOME"] ?? NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
     for key in ["TMPDIR", "LANG", "LC_ALL", "TBD_PORTAL_URL", "TBD_CHAT_DEBUG_STREAM"] { if let v = inherited[key] { env[key] = v } }
+    #if DEBUG
+      // C282 (WP1b) live proof by QA (TBD Dev only): the plan reads' field names and counts, never values.
+      if inherited["TBD_SHAPE_LOG"] == "1" { env["TBD_SHAPE_LOG"] = "1" }
+    #endif
     // Paths the default agent needs: its bundle and the harness-local tool CLIs (C5).
     env["TBD_RESOURCES"] = resources.appendingPathComponent("Chat").path
     // TBD's agent works NEXT to the app's data ("<dataFolder>-agent"; chat/src/main/appIdentity.ts agentFolder), never
@@ -405,7 +409,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
 }
 
 /// Redacted, error-only log of the Chat helper's stderr at ~/Library/Logs/<dataFolder>/chat-helper.log.
-/// Never records tokens or message content: only error lines, redacted and truncated.
+/// Never records tokens or message content: only error lines, redacted and truncated. TBD Dev (DEBUG) with
+/// TBD_SHAPE_LOG=1 also keeps `[helper:shape]` lines (field names and counts only — C282 proof); Release never does.
 final class TBDHelperLog: @unchecked Sendable {
   static let shared = TBDHelperLog()
   private let queue = DispatchQueue(label: "com.tealbrick.desktop.chat-helper-log")
@@ -432,8 +437,13 @@ final class TBDHelperLog: @unchecked Sendable {
   }
   /// One stderr line from the helper; kept only when it describes an error.
   func record(_ line: Data) {
-    guard let text = String(data: line, encoding: .utf8)?.trimmingCharacters(in: .whitespaces), !text.isEmpty,
-      Self.errorLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else { return }
+    guard let text = String(data: line, encoding: .utf8)?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return }
+    #if DEBUG
+      // TBD_SHAPE_LOG=1 (TBD Dev): the helper's shape-only lines (field names and counts) for QA's live proof (C282).
+      // Release neither passes the variable to the helper nor keeps these lines (review dev.12 #1).
+      if text.hasPrefix("[helper:shape]") { write(Self.redact(text)); return }
+    #endif
+    guard Self.errorLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else { return }
     write(Self.redact(text))
   }
   /// A host-side event (no helper output involved).

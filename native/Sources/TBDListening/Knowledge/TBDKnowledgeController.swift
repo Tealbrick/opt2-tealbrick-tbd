@@ -13,6 +13,8 @@ final class TBDKnowledgeController: ObservableObject {
     @Published private(set) var failures: [String: String] = [:]
     /// Bumped when a link is stored so views reload.
     @Published private(set) var revision = 0
+    /// Nil when Knowledge is paid for and running in the workspace; else the sentence to show (C282), set by the host.
+    @Published var availability: String?
     var onMessage: ((String) -> Void)?
 
     private let database: TBDListeningDatabase?
@@ -38,6 +40,7 @@ final class TBDKnowledgeController: ObservableObject {
         let id = request.transcriptId
         if let existing = link(for: id) { return TBDKnowledgeSaveResult(documentId: existing.documentId, area: existing.area) }
         guard !isSaving(id) else { throw TBDKnowledgeError("This transcript is already being saved to Knowledge.") }
+        if let availability { throw TBDKnowledgeError(availability) }
         guard let saver = saver() else { throw TBDKnowledgeError.signIn }
         status[id] = "Saving…"
         failures[id] = nil
@@ -55,7 +58,7 @@ final class TBDKnowledgeController: ObservableObject {
 
     /// True for a finished transcript of an enabled kind that was not saved yet and is not being saved.
     func shouldAutoSave(_ item: TBDTranscription) -> Bool {
-        item.status == .completed && preferences.autoSavesToKnowledge(item.sourceKind)
+        availability == nil && item.status == .completed && preferences.autoSavesToKnowledge(item.sourceKind)
             && !item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isSaving(item.id) && link(for: item.id) == nil
     }

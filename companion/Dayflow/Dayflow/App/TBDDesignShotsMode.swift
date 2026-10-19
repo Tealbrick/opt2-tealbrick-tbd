@@ -130,6 +130,10 @@
         for (name, flow) in OnboardingShots.screens() {
           try render(TBDOnboardingView(flow: flow), size: main, dark: dark, name: "onboarding-\(name)-\(theme)")
         }
+        // The summary scrolls at 800 pt with eight lines; the larger window shows every line (paid-app line, WP1b).
+        for (name, flow) in OnboardingShots.screens() where name.hasPrefix("5-summary") {
+          try render(TBDOnboardingView(flow: flow), size: wide, dark: dark, name: "onboarding-\(name)-1600-\(theme)")
+        }
         try render(StatusMenuView(dismissMenu: {}), size: CGSize(width: 320, height: 640), dark: dark, name: "menu-\(theme)")
       }
 
@@ -387,10 +391,11 @@ private enum OnboardingShots {
     let all = Set(TBDOnboardingPermission.allCases)
     let allOn = TBDOnboardingChecks(
       signedIn: true, workspaceName: "Studio North", agentModelReady: true, agentModelName: "gpt-oss:20b", agentPaired: true,
-      granted: all, companionModelReady: true, companionModelName: "qwen3-vl:4b", speechModelOnDisk: true)
+      granted: all, companionModelReady: true, companionModelName: "qwen3-vl:4b", speechModelOnDisk: true,
+      paidApps: TBDEntitlements(apps: [.knowledge: .unlocked], workspace: "ws").summaryChecks)
     let some = TBDOnboardingChecks(
       signedIn: true, workspaceName: "Studio North", granted: [.screenRecording, .microphone, .notifications],
-      speechDownload: 0.62)
+      speechDownload: 0.62, paidApps: TBDEntitlements(apps: [.knowledge: .install], workspace: "ws").summaryChecks)
     return [
       ("0-welcome", .preview(step: .welcome, choices: .init(), checks: .init())),
       ("1-portal", .preview(step: .portal, choices: .init(portal: .yes), checks: .init())),

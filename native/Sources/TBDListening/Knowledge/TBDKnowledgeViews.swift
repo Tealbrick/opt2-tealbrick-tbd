@@ -14,6 +14,8 @@ struct TBDKnowledgeButton: View {
             if let link = knowledge.link(for: item.id) {
                 Label("Saved to Knowledge", systemImage: "checkmark.circle").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.muted)
                     .help("Knowledge document \(link.documentId)")
+            } else if let availability = knowledge.availability {
+                TBDAvailableWith(availability)   // C282: Knowledge is not paid for or not installed in this workspace
             } else if let status = knowledge.status[item.id] {
                 HStack(spacing: TBDTokens.Space.xs) {
                     ProgressView().controlSize(.small)

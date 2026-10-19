@@ -119,6 +119,21 @@ test("C7: a session past its local idle mark stays signed in while Portal accept
   } finally { await portal.close(); }
 });
 
+test("C282: licences.list is read assigned-only, across pages", async () => {
+  const portal = await fakePortal((req, _b, res) => {
+    if (req.url === "/api/v1/licences?assigned=true&limit=200") return json(res, 200, { items: [{ id: "lic_1", product: "rules" }], nextCursor: "c1" });
+    if (req.url === "/api/v1/licences?assigned=true&limit=200&cursor=c1") return json(res, 200, { items: [{ id: "lic_2", product: "kanban" }], nextCursor: null });
+    err(res, 404, "not_found");
+  });
+  const store = memoryStore();
+  store.save({ token: "tbo_a", sessionId: "osn_a", expiresAt: Date.now() + 60_000, email: null });
+  const p = createPortal({ origin: portal.origin, store, machineLabel: "m" });
+  try {
+    assert.deepEqual((await p.licences()).map((l) => l.product), ["rules", "kanban"]);
+    assert.equal(portal.seen.at(-1)?.auth, "Bearer tbo_a");
+  } finally { await portal.close(); }
+});
+
 test("pending holds are counts per app from instances.list", async () => {
   const portal = await fakePortal((req, _b, res) => {
     if (req.url === "/api/v1/workspaces/ws_1/instances") return json(res, 200, { items: [{ product: "knowledge", pendingHolds: 0 }, { product: "connect", pendingHolds: 2 }] });
@@ -129,5 +144,18 @@ test("pending holds are counts per app from instances.list", async () => {
   const p = createPortal({ origin: portal.origin, store, machineLabel: "m" });
   try {
     assert.deepEqual(await p.pendingHolds("ws_1"), [{ product: "connect", count: 2 }]);
+  } finally { await portal.close(); }
+});
+
+test("C282 fail-safe: a licence list longer than 10 pages is an error (never a short list read as 'not paid')", async () => {
+  const portal = await fakePortal((req, _b, res) => {
+    if (req.url?.startsWith("/api/v1/licences?assigned=true&limit=200")) return json(res, 200, { items: [{ id: "lic", product: "rules" }], nextCursor: "more" });
+    err(res, 404, "not_found");
+  });
+  const store = memoryStore();
+  store.save({ token: "tbo_a", sessionId: "osn_a", expiresAt: Date.now() + 60_000, email: null });
+  const p = createPortal({ origin: portal.origin, store, machineLabel: "m" });
+  try {
+    await assert.rejects(p.licences(), /longer than 10 pages/);
   } finally { await portal.close(); }
 });

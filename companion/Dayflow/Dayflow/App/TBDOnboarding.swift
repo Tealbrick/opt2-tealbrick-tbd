@@ -148,6 +148,14 @@ final class TBDOnboardingController: ObservableObject {
   var portalAnswer: TBDOnboardingAnswer? { choices.portal ?? (checks.signedIn ? .yes : nil) }
   var agentAnswer: TBDOnboardingAnswer? { choices.agent ?? (checks.agentModelReady ? .yes : nil) }
 
+  /// The person's own Portal (the active Portal profile's issuer: portal.tealbrick.com, dev.tealbrick.com or a
+  /// self-hosted Portal; review dev.12 #4). The public Portal only when no profile is loaded yet.
+  var portalURL: URL {
+    let issuer = account.profiles.first { $0.id == account.activeProfile }?.issuer ?? ""
+    if let url = URL(string: issuer), ["https", "http"].contains(url.scheme ?? "") { return url }
+    return URL(string: "https://portal.tealbrick.com")!
+  }
+
   /// Edit mode after the first run: back to the app without other changes (review dev.9 #8).
   var canCloseEdit: Bool { editing && machine.record.completed }
   func closeEdit() {
@@ -186,6 +194,12 @@ final class TBDOnboardingController: ObservableObject {
       (.accessibility, permissions.accessibility), (.notifications, permissions.notifications),
     ]
     c.granted = Set(granted.filter { $0.1 == "Allowed" }.map(\.0))
+    // C282 (WP1b): the paid apps behind TBD's functions, from the helper's cached snapshot (10 min; last good on error).
+    if account.signedIn, step == .summary {
+      c.paidApps = TBDEntitlements(helperValue: try? await TBDChatRuntime.shared.accountCall("entitlements")).summaryChecks
+    } else if account.signedIn {
+      c.paidApps = checks.paidApps
+    }
     let companion = companionModel()
     c.companionModelReady = companion != nil
     c.companionModelName = companion
@@ -540,7 +554,7 @@ struct TBDOnboardingView: View {
         .frame(width: cardWidth)
         TBDStepFlow(steps: steps,
                     current: Binding(get: { flow.step.index }, set: { flow.move(to: $0) }),
-                    size: CGSize(width: cardWidth, height: max(420, min(640, geo.size.height - 150)))) {
+                    size: CGSize(width: cardWidth, height: max(420, min(900, geo.size.height - 150)))) {
           flow.finish()
         }
         .overlay(TBDBrickShape().strokeBorder(TBDColor.line, lineWidth: TBDKit.hair))
@@ -1035,19 +1049,19 @@ struct TBDOnboardingView: View {
   /// A missing area is never red: a "No" is a valid answer.
   private func summaryLine(_ line: TBDOnboardingLine) -> some View {
     HStack(spacing: TBDKit.s3) {
-      Image(systemName: line.on ? "checkmark.circle" : "circle.dashed")
+      Image(systemName: line.on ? "checkmark.circle" : line.neutral ? "questionmark.circle" : "circle.dashed")
         .foregroundStyle(line.on ? TBDColor.tealInk : TBDColor.muted).frame(width: 22).accessibilityHidden(true)
       Text(line.area).font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink).frame(width: 190, alignment: .leading)
-      Text(line.text).font(TBDTokens.Typography.hint).foregroundStyle(line.on ? TBDColor.inkSoft : TBDColor.ink)
+      Text(line.text).font(TBDTokens.Typography.hint).foregroundStyle(line.on || line.neutral ? TBDColor.inkSoft : TBDColor.ink)
         .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: TBDKit.s3)
       Button(line.action) {
         switch line.fix {
         case .step(let step): flow.open(step)
-        case .portal: if let url = URL(string: "https://portal.tealbrick.com") { NSWorkspace.shared.open(url) }
+        case .portal: NSWorkspace.shared.open(flow.portalURL)
         }
       }
-      .buttonStyle(TBDButtonStyle(line.on ? .quiet : .secondary))
+      .buttonStyle(TBDButtonStyle(line.on || line.neutral ? .quiet : .secondary))
       // VoiceOver says the action and the area ("Sign in, Workspace"); the line's text stays its own element
       // (a combined element hid the action word, dev.9 follow-up 1).
       .accessibilityLabel("\(line.action), \(line.area)")

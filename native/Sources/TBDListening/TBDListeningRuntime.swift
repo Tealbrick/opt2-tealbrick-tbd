@@ -24,6 +24,7 @@ public final class TBDListeningRuntime: ObservableObject {
         started = true
         let context = TBDListeningContext(runtime: self)
         self.context = context
+        context.knowledge.availability = knowledgeAvailability
         context.voice.onMessage = { [weak self] in self?.captureMessage = $0 }
         context.voice.onRawTranscript = { [weak self] in self?.lastRawTranscript = $0 }
         context.start()
@@ -131,6 +132,13 @@ public final class TBDListeningRuntime: ObservableObject {
     /// Set by the host: sends a "Save to Knowledge" request to the Chat helper, which calls
     /// Knowledge as TBD's own agent. Nil (no host, not signed in) makes saves fail with a plain message.
     public var saveToKnowledge: TBDKnowledgeSaver?
+    /// Set by the host from the workspace's entitlements (C282): nil = Knowledge is available, else the sentence
+    /// ("Available with Knowledge."). Locks the button and the automatic saves.
+    /// nil until the host has read the plan: an unread plan never locks Save to Knowledge (C282 fail-safe, review
+    /// dev.12 #3); Core still refuses an unpaid save.
+    public var knowledgeAvailability: String? = nil {
+        didSet { context?.knowledge.availability = knowledgeAvailability }
+    }
 
     func report(_ message: String) { captureMessage = message }
     func bringToFront() { activate?() }

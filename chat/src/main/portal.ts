@@ -9,6 +9,8 @@ import type {
   DeviceTokenInput,
   ErrorEnvelope,
   InstanceList,
+  Licence,
+  LicenceList,
   WorkspaceList,
 } from "@opt2-tealbrick/spec/routes";
 
@@ -214,6 +216,21 @@ export function createPortal(deps: PortalDeps) {
         cursor = list.nextCursor;
         if (!cursor) break;
       }
+      return items;
+    },
+    /** licences.list, assigned licences only, all pages (bounded): what the account paid for, per workspace (C282). */
+    async licences(): Promise<Licence[]> {
+      const items: Licence[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const query: string = `?assigned=true&limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+        const list: LicenceList = await read<LicenceList>(`/licences${query}`);
+        items.push(...list.items);
+        cursor = list.nextCursor;
+        if (!cursor) break;
+      }
+      // More than 10 pages: an incomplete list must not read as "not paid" (review dev.12 #5) → the caller's unknown.
+      if (cursor) throw new Error("licence list longer than 10 pages");
       return items;
     },
     /** Harness labels for the agent cards ("Claude Code", …). */

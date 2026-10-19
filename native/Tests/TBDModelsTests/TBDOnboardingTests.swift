@@ -179,7 +179,7 @@ final class TBDOnboardingTests: XCTestCase {
     func testSummaryAllOn() {
         let c = TBDOnboardingChecks(signedIn: true, workspaceName: "Studio North", agentModelReady: true, agentModelName: "qwen3:8b",
                                     agentPaired: true, granted: allGranted, companionModelReady: true, companionModelName: "Qwen3-VL 4B",
-                                    speechModelOnDisk: true, paidApps: [(name: "Knowledge", function: "Save to Knowledge", active: true)])
+                                    speechModelOnDisk: true, paidApps: [TBDPaidAppCheck(name: "Knowledge", function: "Save to Knowledge", access: .unlocked)])
         let lines = TBDOnboardingSummary.lines(c)
         XCTAssertEqual(lines.map(\.area), ["Workspace", "TBD's agent", "Screen activity", "Daily and Weekly", "Dictation and meetings", "Notifications", "Knowledge"])
         XCTAssertTrue(lines.allSatisfy(\.on))
@@ -191,7 +191,7 @@ final class TBDOnboardingTests: XCTestCase {
 
     func testSummarySomeSkippedSaysWhatIsMissingAndTheOneFix() {
         let c = TBDOnboardingChecks(signedIn: true, workspaceName: "Studio North", granted: [.screenRecording, .microphone, .notifications],
-                                    paidApps: [(name: "Knowledge", function: "Save to Knowledge", active: false)])
+                                    paidApps: [TBDPaidAppCheck(name: "Knowledge", function: "Save to Knowledge", access: .locked)])
         let lines = TBDOnboardingSummary.lines(c)
         let off = lines.filter { !$0.on }
         XCTAssertEqual(off.map(\.text), [
@@ -209,7 +209,7 @@ final class TBDOnboardingTests: XCTestCase {
 
     func testSummaryShowsARunningDownloadAndHidesPaidAppsWhenSignedOut() {
         let c = TBDOnboardingChecks(granted: [.microphone, .accessibility], companionDownload: 0.62, speechDownload: 0.3,
-                                    paidApps: [(name: "Knowledge", function: "Save to Knowledge", active: false)])
+                                    paidApps: [TBDPaidAppCheck(name: "Knowledge", function: "Save to Knowledge", access: .locked)])
         let lines = TBDOnboardingSummary.lines(c)
         XCTAssertTrue(lines.contains { $0.on && $0.text == "The model for Daily and Weekly is downloading (62%). Daily starts when it is done." })
         XCTAssertTrue(lines.contains { $0.on && $0.text == "The speech model is downloading (30%). Dictation works when it is done." })
@@ -223,6 +223,29 @@ final class TBDOnboardingTests: XCTestCase {
         c.agentCloud = "Amazon Bedrock"
         XCTAssertEqual(TBDOnboardingSummary.lines(c).first { $0.area == "TBD's agent" }?.text,
                        "TBD's agent runs on this Mac and uses us.anthropic.claude-sonnet-4-6 on Amazon Bedrock.")
+    }
+
+    func testSummaryPaidAppLinesFromTheEntitlements() {
+        let paid = TBDEntitlements(apps: [.knowledge: .install], workspace: "ws1")
+        let c = TBDOnboardingChecks(signedIn: true, workspaceName: "W", paidApps: paid.summaryChecks)
+        let line = TBDOnboardingSummary.lines(c).first { $0.area == "Knowledge" }
+        XCTAssertEqual(line?.on, false)
+        XCTAssertEqual(line?.text, "Your plan has Knowledge. Install it in your workspace to use Save to Knowledge.")
+        XCTAssertEqual(line?.fix, .portal(app: "Knowledge"))
+        // Fail-safe (dev.12): an unreadable plan is unknown — a neutral line, not "off", and no lock.
+        XCTAssertEqual(TBDEntitlements(helperValue: "garbage").summaryChecks.first?.access, .unknown)
+        XCTAssertNil(TBDEntitlements(helperValue: nil).availability(.knowledge), "unknown never locks Save to Knowledge")
+        XCTAssertNil(TBDEntitlements(helperValue: ["ws": "w", "apps": [:]]).availability(.knowledge), "a missing app is unknown")
+        let unknownLines = TBDOnboardingSummary.lines(TBDOnboardingChecks(signedIn: true, workspaceName: "W", agentModelReady: true, agentPaired: true,
+            granted: Set(TBDOnboardingPermission.allCases), companionModelReady: true, speechModelOnDisk: true,
+            paidApps: TBDEntitlements.unknown.summaryChecks))
+        let neutral = unknownLines.first { $0.area == "Knowledge" }
+        XCTAssertEqual(neutral?.neutral, true)
+        XCTAssertEqual(neutral?.text, "Could not check your plan. Save to Knowledge is not locked; open Portal to see your plan.")
+        XCTAssertEqual(TBDOnboardingSummary.headline(unknownLines), "Everything is ready.", "a neutral line is not counted as off")
+        let unlocked = TBDEntitlements(apps: [.knowledge: .unlocked], workspace: "ws1").summaryChecks
+        XCTAssertEqual(TBDOnboardingSummary.lines(TBDOnboardingChecks(signedIn: true, workspaceName: "W", paidApps: unlocked))
+            .first { $0.area == "Knowledge" }?.text, "Save to Knowledge works.")
     }
 
     func testSummarySaysWhenCaptureIsPaused() {
