@@ -36,6 +36,20 @@ final class AppState: ObservableObject, AppStateManaging {  // <-- Add AppStateM
     self.isRecording = false
   }
 
+  /// dev.8 one-time fix (TBD-DEV7-1): dev.7's setup saved "capture off" for the fresh com.tealbrick.desktop identity
+  /// (TBDCompanionSetup.openCompanion wrote isRecording = false), so capture never started. Clear that saved choice
+  /// ONCE: capture then starts by default when Screen Recording is granted (AppDelegate restores `saved ?? true`).
+  /// The flag makes it run exactly once; a pause the person makes after it is kept.
+  static let recordingDefaultMigrationKey = "tbd.migration.dev8.recordingDefaultOn"
+
+  @discardableResult
+  static func migrateRecordingDefaultIfNeeded(_ defaults: UserDefaults = .standard) -> Bool {
+    guard !defaults.bool(forKey: recordingDefaultMigrationKey) else { return false }
+    defaults.removeObject(forKey: "isRecording")
+    defaults.set(true, forKey: recordingDefaultMigrationKey)   // after the removal: a crash in between re-runs it
+    return true
+  }
+
   /// Enable persistence after onboarding is complete
   func enablePersistence() {
     shouldPersist = true
