@@ -6,7 +6,7 @@ import type { RemoteAgent } from "../shared/ipc";
 import { loadState, pickFolder, saveState } from "./store";
 import { localFileExists, openLocalFile, openRemoteFile, revealLocalFile, saveRemoteFile } from "./deliveredFile";
 import { answerAsk } from "./asks";
-import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, consentStore, consentWorkspace, ensurePerson, getServices, removeAgentFolder, resetServices, saveAttachment } from "./services";
+import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, consentStore, consentWorkspace, ensurePerson, getServices, startSessionKeepAlive, removeAgentFolder, resetServices, saveAttachment } from "./services";
 import { connectMcp } from "@opt2-tealbrick/bridge";
 import { knowledgeSave, type KnowledgeSaveInput } from "./knowledgeSave";
 import { flowTaskBoardComplete, flowTaskBoardList } from "./flowTaskBoard";
@@ -87,6 +87,7 @@ function flowCompleteInput(raw: unknown): { issue: string; result: string } {
 }
 
 export function registerIpc(): void {
+  startSessionKeepAlive();
   const signedIn = () => Boolean(getServices().portal.session());
   ipcMain.handle("studio:portalWorkspaces", withPerson(() => portalWorkspaces()));
   ipcMain.handle("studio:selectPortalWorkspace", withPerson((_e: unknown, id: string) => selectPortalWorkspace(id)));
@@ -105,6 +106,9 @@ export function registerIpc(): void {
     const s = publicPersonSession(getServices().portal.session());
     return s ? { expiresAt: s.expiresAt, email: s.email ?? undefined } : null;
   }));
+
+  // C7: why the person is signed out, when Portal ended the session (one sentence, no token); null otherwise.
+  ipcMain.handle("studio:sessionNotice", withPerson(async () => getServices().portal.endedNotice()));
 
   // Person sign-in: device flow client_id=tbd, scope=owner. The approval page opens in the system browser.
   ipcMain.handle("studio:signIn", withPerson(async () => {

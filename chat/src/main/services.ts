@@ -9,6 +9,7 @@ import { app, nativeCall } from "../tbd/host";
 import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
 import { currentControlPlane } from "./controlPlanes";
 import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
+import { createSessionKeepAlive, type SessionKeepAlive } from "./sessionKeepAlive";
 import { createEntitlements, type Entitlements } from "./entitlements";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
 import { createDefaultAgent, type AgentRoute, type DefaultAgent, type DefaultAgentDeps } from "./defaultAgent";
@@ -59,6 +60,21 @@ function personStore() {
         .catch((e) => console.error(`[person] keychain write failed: ${e instanceof Error ? e.message : String(e)}`));
     },
   };
+}
+
+/**
+ * C7: while a person is signed in, one cheap read about every 30 min keeps Core's idle window sliding even when TBD's
+ * window is closed or nothing else calls Portal (sessionKeepAlive.ts). Started once with the helper; it reads only the
+ * in-memory session (never the Keychain) and makes no call while signed out.
+ */
+let keepAlive: SessionKeepAlive | null = null;
+export function startSessionKeepAlive(): void {
+  keepAlive ??= createSessionKeepAlive({
+    signedIn: () => Boolean(services?.portal.session()),
+    touch: () => { if (!services) throw new Error("no session"); return services.portal.me(); },
+    log: (line) => console.error(`[helper] ${line}`),
+  });
+  keepAlive.start();
 }
 
 /** The approved connection record: ids and URLs only, no secret. */

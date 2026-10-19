@@ -83,7 +83,7 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
 
   // Native settings use the same IPC handlers and credential store as Chat.
   func accountCall(_ channel: String, args: [Any] = []) async throws -> Any {
-    let allowed: Set<String> = ["session", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
+    let allowed: Set<String> = ["session", "sessionNotice", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
       // Read-only: agent directory (TBD agent) and the verified update feed for the native updater.
       "listAgents", "checkUpdate",
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
