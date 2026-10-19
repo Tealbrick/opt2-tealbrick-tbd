@@ -68,8 +68,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // install it runs (and sets its flag) before setup; a pause made later is then never cleared (review dev.8 #1).
     AppState.migrateRecordingDefaultIfNeeded()
     // S2 (C287): once, remove TBD's own temporary CODEX_HOME folders (copies of the Codex login made up to dev.8).
-    if let removed = TBDCodexTempHomeCleanup.runOnce() {
-      print("TBD: removed \(removed) temporary Codex home folder(s) made by earlier builds")
+    if let result = TBDCodexTempHomeCleanup.runOnce() {
+      print("TBD: removed \(result.removed) temporary Codex home folder(s) made by earlier builds; \(result.failed) failed (retried next launch)")
     }
 
     // Check if we've passed the screen recording permission step

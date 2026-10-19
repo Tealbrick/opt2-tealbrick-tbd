@@ -29,7 +29,7 @@ final class TBDCodexTempHomeCleanupTests: XCTestCase {
         try Data().write(to: temp.appendingPathComponent("Dayflow-codex-home-file"))
         try FileManager.default.createSymbolicLink(at: temp.appendingPathComponent("Dayflow-codex-home-link"), withDestinationURL: codex)
 
-        XCTAssertEqual(TBDCodexTempHomeCleanup.run(temp: temp), 2)
+        XCTAssertEqual(TBDCodexTempHomeCleanup.run(temp: temp).removed, 2)
 
         let left = try FileManager.default.contentsOfDirectory(atPath: temp.path).sorted()
         XCTAssertEqual(left, ["Dayflow-codex-home-", "Dayflow-codex-home-file", "Dayflow-codex-home-link", "other-codex-home"])
@@ -43,9 +43,9 @@ final class TBDCodexTempHomeCleanupTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defer { UserDefaults.standard.removePersistentDomain(forName: name) }
         _ = try mkdir("T/Dayflow-codex-home-a")
-        XCTAssertEqual(TBDCodexTempHomeCleanup.runOnce(defaults: defaults, temp: temp), 1)
+        XCTAssertEqual(TBDCodexTempHomeCleanup.runOnce(defaults: defaults, temp: temp)?.removed, 1)
         _ = try mkdir("T/Dayflow-codex-home-b")
-        XCTAssertNil(TBDCodexTempHomeCleanup.runOnce(defaults: defaults, temp: temp))
+        XCTAssertNil(TBDCodexTempHomeCleanup.runOnce(defaults: defaults, temp: temp).map(\.removed))
         XCTAssertTrue(FileManager.default.fileExists(atPath: temp.appendingPathComponent("Dayflow-codex-home-b").path))
     }
 }

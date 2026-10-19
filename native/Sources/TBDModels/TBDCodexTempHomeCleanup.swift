@@ -9,25 +9,26 @@ public enum TBDCodexTempHomeCleanup {
     public static let prefix = "Dayflow-codex-home-"
     public static let doneKey = "tbd.migration.dev9.codexTempHomes"
 
-    /// Removes the matching folders in `temp` and returns how many it removed.
+    /// Removes the matching folders in `temp`: how many it removed, and how many it could not remove.
     @discardableResult
-    public static func run(temp: URL = FileManager.default.temporaryDirectory, fileManager: FileManager = .default) -> Int {
-        guard let names = try? fileManager.contentsOfDirectory(atPath: temp.path) else { return 0 }
-        var removed = 0
+    public static func run(temp: URL = FileManager.default.temporaryDirectory, fileManager: FileManager = .default) -> (removed: Int, failed: Int) {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: temp.path) else { return (0, 0) }
+        var removed = 0, failed = 0
         for name in names where name.hasPrefix(prefix) && name.count > prefix.count && !name.contains("/") {
             let url = temp.appendingPathComponent(name, isDirectory: false)
             guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]),
                   values.isSymbolicLink != true, values.isDirectory == true else { continue }
-            if (try? fileManager.removeItem(at: url)) != nil { removed += 1 }
+            if (try? fileManager.removeItem(at: url)) != nil { removed += 1 } else { failed += 1 }
         }
-        return removed
+        return (removed, failed)
     }
 
-    /// Runs once per install (flag in `defaults`). Returns the count, or nil when it already ran.
-    public static func runOnce(defaults: UserDefaults = .standard, temp: URL = FileManager.default.temporaryDirectory) -> Int? {
+    /// Runs until it succeeded once (flag in `defaults`; a folder it could not remove still holds a login copy, so the
+    /// next launch tries again, review dev.9 #14). Returns the result, or nil when it already succeeded.
+    public static func runOnce(defaults: UserDefaults = .standard, temp: URL = FileManager.default.temporaryDirectory) -> (removed: Int, failed: Int)? {
         guard !defaults.bool(forKey: doneKey) else { return nil }
-        let count = run(temp: temp)
-        defaults.set(true, forKey: doneKey)
-        return count
+        let result = run(temp: temp)
+        if result.failed == 0 { defaults.set(true, forKey: doneKey) }
+        return result
     }
 }

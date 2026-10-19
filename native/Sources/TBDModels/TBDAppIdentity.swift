@@ -43,7 +43,8 @@ public enum TBDIdentity {
     /// Without it, an existing dev Keychain item made by an older ad-hoc build makes macOS ask for the login password.
     public static let devVariant: String? = {
         guard isDev, !isDesignShots, let raw = ProcessInfo.processInfo.environment["TBD_DEV_IDENTITY"],
-              (1...12).contains(raw.count), raw.allSatisfy({ ("a"..."z").contains($0) || ("0"..."9").contains($0) }) else { return nil }
+              (1...12).contains(raw.unicodeScalars.count),
+              raw.unicodeScalars.allSatisfy({ ("a"..."z").contains($0) || ("0"..."9").contains($0) }) else { return nil }
         return raw
     }()
 

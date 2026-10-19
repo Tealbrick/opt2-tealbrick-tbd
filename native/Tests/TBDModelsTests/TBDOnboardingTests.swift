@@ -36,14 +36,18 @@ final class TBDOnboardingTests: XCTestCase {
         XCTAssertEqual(store.load()?.choices.portal, .no)
     }
 
-    func testAgentStepNeedsPairingOnlyWhenThePersonUsesTheWorkspace() {
+    func testAgentStepNeedsAWorkingModelOrANoAndPairingNeverLocksIt() {
         var m = TBDOnboardingMachine(store: TBDOnboardingStore(defaults: defaults()))
         m.edit(.agent)
         m.update { $0.portal = .yes }
-        XCTAssertFalse(m.isDone(.agent, TBDOnboardingChecks(signedIn: true, workspaceName: "W", agentModelReady: true)))
-        XCTAssertTrue(m.isDone(.agent, TBDOnboardingChecks(signedIn: true, workspaceName: "W", agentModelReady: true, agentPaired: true)))
-        m.update { $0.portal = .no }
-        XCTAssertTrue(m.isDone(.agent, TBDOnboardingChecks(agentModelReady: true)))
+        XCTAssertFalse(m.isDone(.agent, TBDOnboardingChecks(signedIn: true, workspaceName: "W")))
+        // Review dev.9 #5: a failed pairing must not lock the step; the summary shows the missing pairing instead.
+        let unpaired = TBDOnboardingChecks(signedIn: true, workspaceName: "W", agentModelReady: true)
+        XCTAssertTrue(m.isDone(.agent, unpaired))
+        let line = TBDOnboardingSummary.lines(unpaired).first { $0.area == "TBD's agent" }
+        XCTAssertEqual(line?.on, false)
+        XCTAssertEqual(line?.text, "TBD's agent works on this Mac. It is not paired with W yet.")
+        XCTAssertEqual(line?.fix, .step(.agent))
         m.update { $0.agent = .no }
         XCTAssertTrue(m.isDone(.agent, TBDOnboardingChecks()))
     }
@@ -94,17 +98,63 @@ final class TBDOnboardingTests: XCTestCase {
         m.finish()
         XCTAssertEqual(m.launch(), .app)
 
-        // "Choose a model for Daily" in the app → step Models in edit mode.
+        // "Choose a model for Daily" in the app → step Models in edit mode; completed stays true.
         m.edit(.models)
-        XCTAssertEqual(TBDOnboardingMachine(store: TBDOnboardingStore(defaults: d)).record.step, .models)
+        XCTAssertTrue(m.record.editing)
+        XCTAssertTrue(m.record.completed)
+        // Quitting in the middle of the edit opens the app next time, not the flow (review dev.9 #8).
         var reopened = TBDOnboardingMachine(store: TBDOnboardingStore(defaults: d))
-        XCTAssertEqual(reopened.launch(), .flow(.models, editing: true))
+        XCTAssertEqual(reopened.launch(), .app)
+        XCTAssertEqual(reopened.record.step, .models)
         XCTAssertFalse(reopened.forward(TBDOnboardingChecks()), "the step still needs its check or a No")
         XCTAssertTrue(reopened.forward(TBDOnboardingChecks(companionModelReady: true, speechModelOnDisk: true)))
         XCTAssertEqual(reopened.record.step, .summary, "edit mode skips the remaining steps")
         reopened.finish()
         XCTAssertEqual(reopened.launch(), .app)
         XCTAssertFalse(reopened.record.editing)
+    }
+
+    func testBackToTBDEndsAnEditWithoutOtherChanges() {
+        var m = TBDOnboardingMachine(store: TBDOnboardingStore(defaults: defaults()))
+        _ = m.launch()
+        m.update { $0.portal = .no }
+        m.finish()
+        m.edit(.portal)
+        m.endEdit()
+        XCTAssertFalse(m.record.editing)
+        XCTAssertTrue(m.record.completed)
+        XCTAssertEqual(m.record.choices.portal, .no)
+    }
+
+    func testAnyMoveClearsAStaleRelaunchMarker() {
+        let d = defaults()
+        var m = TBDOnboardingMachine(store: TBDOnboardingStore(defaults: d))
+        _ = m.launch()
+        m.edit(.permissions)
+        // The quit was cancelled (Listening guard): the person goes on in the same process.
+        m.markRelaunch(pid: 1)
+        m.back()
+        XCTAssertNil(m.record.relaunch)
+        m.markRelaunch(pid: 1)
+        m.edit(.models)
+        XCTAssertNil(m.record.relaunch)
+        m.markRelaunch(pid: 1) // moves the step to Permissions
+        XCTAssertTrue(m.forward(TBDOnboardingChecks(granted: allGranted)))
+        XCTAssertNil(TBDOnboardingStore(defaults: d).load()?.relaunch)
+    }
+
+    func testARecordFromAnotherVersionNeverResetsTheFlow() throws {
+        let d = defaults()
+        // A later version added fields; an earlier one had fewer. Both still load.
+        let json = #"{"version":2,"step":"models","completed":false,"editing":false,"newField":true,"choices":{"portal":"no","agent":"maybe","permissionsNotNow":["microphone","camera"]},"updatedAt":"2026-10-19T10:00:00Z"}"#
+        d.set(Data(json.utf8), forKey: TBDOnboardingStore.key)
+        let record = try XCTUnwrap(TBDOnboardingStore(defaults: d).load())
+        XCTAssertEqual(record.step, .models)
+        XCTAssertEqual(record.choices.portal, .no)
+        XCTAssertNil(record.choices.agent, "an unknown answer reads as not answered")
+        XCTAssertEqual(record.choices.permissionsNotNow, [.microphone])
+        d.set(Data(#"{"step":"permissions"}"#.utf8), forKey: TBDOnboardingStore.key)
+        XCTAssertEqual(TBDOnboardingStore(defaults: d).load()?.step, .permissions)
     }
 
     func testAnInstallThatFinishedTheOldSetupOpensOnceAtTheSummary() {
@@ -166,6 +216,12 @@ final class TBDOnboardingTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0.text.contains("Download the speech model") })
         XCTAssertFalse(lines.contains { $0.area == "Knowledge" })
         XCTAssertEqual(lines.first?.text, "Not signed in. Chat shows only TBD's own agent.")
+    }
+
+    func testSummarySaysWhenCaptureIsPaused() {
+        let c = TBDOnboardingChecks(granted: [.screenRecording], capturePaused: true)
+        XCTAssertEqual(TBDOnboardingSummary.lines(c).first { $0.area == "Screen activity" }?.text,
+                       "Screen recording is allowed. Capture is paused now; start it from the menu bar.")
     }
 
     func testSubscriptionIsHiddenForTheAgentSDKAndShownForTheCLI() {

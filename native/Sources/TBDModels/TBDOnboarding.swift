@@ -39,6 +39,18 @@ public struct TBDOnboardingChoices: Codable, Equatable, Sendable {
     public var speech: TBDOnboardingAnswer?
     /// Rows the person answered "Not now".
     public var permissionsNotNow: Set<TBDOnboardingPermission>
+    /// Tolerant: a field added later (or one this build does not know) never resets the flow (review dev.9 #15).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        portal = try? c.decodeIfPresent(TBDOnboardingAnswer.self, forKey: .portal)
+        agent = try? c.decodeIfPresent(TBDOnboardingAnswer.self, forKey: .agent)
+        agentRuntime = try? c.decodeIfPresent(TBDOnboardingRuntime.self, forKey: .agentRuntime)
+        companion = try? c.decodeIfPresent(TBDOnboardingAnswer.self, forKey: .companion)
+        companionRuntime = try? c.decodeIfPresent(TBDOnboardingRuntime.self, forKey: .companionRuntime)
+        speech = try? c.decodeIfPresent(TBDOnboardingAnswer.self, forKey: .speech)
+        permissionsNotNow = Set((try? c.decodeIfPresent([String].self, forKey: .permissionsNotNow))?
+            .compactMap(TBDOnboardingPermission.init(rawValue:)) ?? [])
+    }
     public init(portal: TBDOnboardingAnswer? = nil, agent: TBDOnboardingAnswer? = nil, agentRuntime: TBDOnboardingRuntime? = nil,
                 companion: TBDOnboardingAnswer? = nil, companionRuntime: TBDOnboardingRuntime? = nil,
                 speech: TBDOnboardingAnswer? = nil, permissionsNotNow: Set<TBDOnboardingPermission> = []) {
@@ -64,6 +76,16 @@ public struct TBDOnboardingRecord: Codable, Equatable, Sendable {
     public var choices: TBDOnboardingChoices
     public var relaunch: TBDOnboardingRelaunch?
     public var updatedAt: Date
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? Self.currentVersion
+        step = (try? c.decodeIfPresent(String.self, forKey: .step)).flatMap(TBDOnboardingStep.init(rawValue:)) ?? .welcome
+        completed = (try? c.decodeIfPresent(Bool.self, forKey: .completed)) ?? false
+        editing = (try? c.decodeIfPresent(Bool.self, forKey: .editing)) ?? false
+        choices = (try? c.decodeIfPresent(TBDOnboardingChoices.self, forKey: .choices)) ?? TBDOnboardingChoices()
+        relaunch = try? c.decodeIfPresent(TBDOnboardingRelaunch.self, forKey: .relaunch)
+        updatedAt = (try? c.decodeIfPresent(Date.self, forKey: .updatedAt)) ?? Date()
+    }
     public init(step: TBDOnboardingStep = .welcome, completed: Bool = false, editing: Bool = false,
                 choices: TBDOnboardingChoices = TBDOnboardingChoices(), relaunch: TBDOnboardingRelaunch? = nil, updatedAt: Date) {
         self.version = Self.currentVersion; self.step = step; self.completed = completed; self.editing = editing
@@ -82,6 +104,8 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
     public var companionModelReady: Bool
     public var companionModelName: String?
     public var speechModelOnDisk: Bool
+    /// Screen recording is allowed but the person paused capture (after the first run). The summary then says so.
+    public var capturePaused = false
     /// Download progress 0...1 while a model downloads in the background (C286 F3: the person may go on). nil = none running.
     public var companionDownload: Double?
     public var speechDownload: Double?
@@ -89,13 +113,13 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
     public var paidApps: [(name: String, function: String, active: Bool)]
     public init(signedIn: Bool = false, workspaceName: String? = nil, agentModelReady: Bool = false, agentModelName: String? = nil,
                 agentPaired: Bool = false, granted: Set<TBDOnboardingPermission> = [], companionModelReady: Bool = false,
-                companionModelName: String? = nil, speechModelOnDisk: Bool = false,
+                companionModelName: String? = nil, speechModelOnDisk: Bool = false, capturePaused: Bool = false,
                 companionDownload: Double? = nil, speechDownload: Double? = nil,
                 paidApps: [(name: String, function: String, active: Bool)] = []) {
         self.signedIn = signedIn; self.workspaceName = workspaceName; self.agentModelReady = agentModelReady
         self.agentModelName = agentModelName; self.agentPaired = agentPaired; self.granted = granted
         self.companionModelReady = companionModelReady; self.companionModelName = companionModelName
-        self.speechModelOnDisk = speechModelOnDisk
+        self.speechModelOnDisk = speechModelOnDisk; self.capturePaused = capturePaused
         self.companionDownload = companionDownload; self.speechDownload = speechDownload; self.paidApps = paidApps
     }
     public static func == (a: Self, b: Self) -> Bool {
@@ -104,6 +128,7 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
             && a.companionModelReady == b.companionModelReady && a.companionModelName == b.companionModelName
             && a.speechModelOnDisk == b.speechModelOnDisk
             && a.companionDownload == b.companionDownload && a.speechDownload == b.speechDownload
+            && a.capturePaused == b.capturePaused
             && a.paidApps.map { "\($0.name)|\($0.function)|\($0.active)" } == b.paidApps.map { "\($0.name)|\($0.function)|\($0.active)" }
     }
 }
@@ -182,9 +207,9 @@ public struct TBDOnboardingMachine: Sendable {
         case .portal:
             return choices.portal == .no || (c.signedIn && c.workspaceName != nil)
         case .agent:
-            if choices.agent == .no { return true }
-            // Paired only when the person also uses the workspace (spec step 2).
-            return c.agentModelReady && (choices.portal != .yes || !c.signedIn || c.agentPaired)
+            // A working model is enough to go on; pairing with the workspace is shown in the summary when missing
+            // (review dev.9 #5: a failed pairing must not lock the step).
+            return choices.agent == .no || c.agentModelReady
         case .permissions:
             return TBDOnboardingPermission.allCases.allSatisfy { c.granted.contains($0) || choices.permissionsNotNow.contains($0) }
         case .models:
@@ -205,6 +230,7 @@ public struct TBDOnboardingMachine: Sendable {
     public mutating func forward(_ c: TBDOnboardingChecks) -> Bool {
         guard isDone(record.step, c), let next = record.step.next else { return false }
         record.step = record.editing ? .summary : next
+        record.relaunch = nil
         persist()
         return true
     }
@@ -213,14 +239,23 @@ public struct TBDOnboardingMachine: Sendable {
     public mutating func back() {
         guard let previous = record.step.previous else { return }
         record.step = previous
+        record.relaunch = nil
         persist()
     }
 
     /// A missing-dependency link in the app (or "Change" on the summary) opens the flow at this step in edit mode.
+    /// `completed` stays as it is: quitting in the middle of an edit opens the app, not the flow (review dev.9 #8).
     public mutating func edit(_ step: TBDOnboardingStep) {
         record.step = step
         record.editing = true
-        record.completed = false
+        record.relaunch = nil
+        persist()
+    }
+
+    /// "Back to TBD" in edit mode after the first run: closes the flow without other changes.
+    public mutating func endEdit() {
+        record.editing = false
+        record.step = .summary
         persist()
     }
 
@@ -274,13 +309,18 @@ public enum TBDOnboardingSummary {
         } else {
             add("Workspace", false, "Not signed in. Chat shows only TBD's own agent.", "Sign in", .step(.portal))
         }
-        if c.agentModelReady {
+        if c.agentModelReady && c.signedIn && !c.agentPaired {
+            let ws = c.workspaceName ?? "your workspace"
+            add("TBD's agent", false, "TBD's agent works on this Mac. It is not paired with \(ws) yet.", "Pair", .step(.agent))
+        } else if c.agentModelReady {
             let model = c.agentModelName.map { " with \($0)" } ?? ""
             add("TBD's agent", true, "TBD's agent runs on this Mac\(model).", "Change", .step(.agent))
         } else {
             add("TBD's agent", false, "TBD's agent is off. Chat has only your workspace agents.", "Set up", .step(.agent))
         }
-        if c.granted.contains(.screenRecording) {
+        if c.granted.contains(.screenRecording) && c.capturePaused {
+            add("Screen activity", true, "Screen recording is allowed. Capture is paused now; start it from the menu bar.", "Change", .step(.permissions))
+        } else if c.granted.contains(.screenRecording) {
             add("Screen activity", true, "TBD records your screen and makes your timeline.", "Change", .step(.permissions))
         } else {
             add("Screen activity", false, "TBD records nothing. Timeline, Daily and Weekly stay empty.", "Allow", .step(.permissions))

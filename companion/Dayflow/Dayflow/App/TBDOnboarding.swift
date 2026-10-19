@@ -37,10 +37,15 @@ final class TBDOnboardingController: ObservableObject {
   let account = TBDAccountCoordinator.shared
   let permissions = TBDPermissions.shared
   let speech = TBDSpeechModelSetup.shared
-  let providers = ProvidersSettingsViewModel()
+  /// Built when the flow first needs it (not at every launch of a finished install, review dev.9 #6).
+  private(set) lazy var providers = ProvidersSettingsViewModel()
   private let registry = TBDModelRegistry()
   private var poll: Task<Void, Never>?
-  private var agentChecked = false
+  /// resolve() reads the agent's key from the Keychain: only when due (step change to Agent/Summary, after
+  /// "Test and save", on open), never on the 2 s timer (review dev.9 #6).
+  private var agentCheckDue = true
+  /// One relaunch at a time (review dev.9 #4).
+  private var relaunching = false
   private var linkObserver: NSObjectProtocol?
   /// A design-shots preview: fixed state, no polling, no links.
   private let isPreview: Bool
@@ -55,9 +60,13 @@ final class TBDOnboardingController: ObservableObject {
     let launch = machine.launch()
     self.machine = machine
     if case .flow = launch { isShowing = true } else { isShowing = false }
-    let current = TBDAgentModelSetup.current(registry)
-    agentRuntime = current.provider == .ollama ? .local : .apiKey
-    agentModel = current.model
+    // The form's start values from the saved route, without reading the key from the Keychain.
+    if let state = try? registry.load(), let route = state.routes[TBDModelTask.agent.rawValue],
+       let connection = state.connections.first(where: { $0.id == route.connectionID }) {
+      let local = connection.endpoint.contains("localhost:11434") || connection.endpoint.contains("127.0.0.1:11434")
+      agentRuntime = local ? .local : .apiKey
+      agentModel = route.model
+    }
     if let runtime = machine.record.choices.agentRuntime, runtime != .subscription { agentRuntime = runtime }
     if preview { return }
     linkObserver = NotificationCenter.default.addObserver(forName: .tbdOpenOnboarding, object: nil, queue: .main) { note in
@@ -75,6 +84,7 @@ final class TBDOnboardingController: ObservableObject {
 
   /// A missing-dependency link (or Settings): the flow at that step, in edit mode.
   func open(_ step: TBDOnboardingStep) {
+    agentCheckDue = true
     machine.edit(step)
     NSApp.activate(ignoringOtherApps: true)
     MainWindowController.shared.showMainWindow()
@@ -96,6 +106,20 @@ final class TBDOnboardingController: ObservableObject {
   func stopPolling() {
     poll?.cancel()
     poll = nil
+    agentKey = ""
+  }
+
+  /// The Yes/No shown on the Workspace and Agent steps: the recorded answer, else what is already set up (a legacy
+  /// install or a link into a step has no recorded answer; review dev.9 #2).
+  var portalAnswer: TBDOnboardingAnswer? { choices.portal ?? (checks.signedIn ? .yes : nil) }
+  var agentAnswer: TBDOnboardingAnswer? { choices.agent ?? (checks.agentModelReady ? .yes : nil) }
+
+  /// Edit mode after the first run: back to the app without other changes (review dev.9 #8).
+  var canCloseEdit: Bool { editing && machine.record.completed }
+  func closeEdit() {
+    machine.endEdit()
+    stopPolling()
+    isShowing = false
   }
 
   func refreshChecks() async {
@@ -106,8 +130,8 @@ final class TBDOnboardingController: ObservableObject {
     c.signedIn = account.signedIn
     c.workspaceName = account.workspaces.first { $0.id == account.activeWorkspace }?.name
     // resolve() reads the key from the Keychain: only on the steps that show it, else keep the last answer.
-    if step == .agent || step == .summary || !agentChecked {
-      agentChecked = true
+    if agentCheckDue && (step == .agent || step == .summary) {
+      agentCheckDue = false
       if (try? TBDAgentModelSetup.resolve(registry)) != nil {
         c.agentModelReady = true
         c.agentModelName = TBDAgentModelSetup.current(registry).model
@@ -129,6 +153,7 @@ final class TBDOnboardingController: ObservableObject {
     c.companionModelReady = companion != nil
     c.companionModelName = companion
     c.speechModelOnDisk = speech.ready
+    c.capturePaused = UserDefaults.standard.bool(forKey: TBDOnboardingStore.legacyDoneKey) && !AppState.shared.isRecording
     c.speechDownload = speech.progress
     if checks != c { checks = c }
   }
@@ -170,6 +195,7 @@ final class TBDOnboardingController: ObservableObject {
   func move(to index: Int) {
     guard TBDOnboardingStep.allCases.indices.contains(index) else { return }
     let target = TBDOnboardingStep.allCases[index]
+    defer { if step == .agent || step == .summary { agentCheckDue = true } }
     if target < step {
       while step > target { machine.back() }
     } else if target > step {
@@ -184,7 +210,7 @@ final class TBDOnboardingController: ObservableObject {
     machine.update { choices in
       switch step {
       case .portal: choices.portal = .no
-      case .agent: choices.agent = .no
+      case .agent: if !c.agentModelReady { choices.agent = .no }
       case .permissions:
         choices.permissionsNotNow = Set(TBDOnboardingPermission.allCases.filter { !c.granted.contains($0) })
       case .models:
@@ -201,7 +227,8 @@ final class TBDOnboardingController: ObservableObject {
   /// (TBD-DEV7-1 fix 1, `TBDCompanionSetup.finishSetup`).
   func finish() {
     let firstRun = !UserDefaults.standard.bool(forKey: TBDOnboardingStore.legacyDoneKey)
-    machine.finish()
+    // The old flag and capture first, then the record: a crash in between never leaves completed=true with
+    // didOnboard=false (which would show the retired setup screen; review dev.9 #9).
     if firstRun {
       AppState.shared.enablePersistence()
       TBDCompanionSetup.finishSetup(
@@ -210,6 +237,7 @@ final class TBDOnboardingController: ObservableObject {
         postNotice: { ScreenRecordingPermissionNotice.post(reason: "setup_without_screen_recording") })
       UserDefaults.standard.set(true, forKey: TBDOnboardingStore.legacyDoneKey)
     }
+    machine.finish()
     stopPolling()
     isShowing = false
   }
@@ -242,13 +270,16 @@ final class TBDOnboardingController: ObservableObject {
       }
       if result.isOK {
         do {
-          try TBDAgentModelSetup.save(provider: provider, endpoint: provider.fixedEndpoint ?? "", apiKey: key, model: model, registry: registry)
+          // A key typed under "API key" never goes to the local connection (review dev.9 #7).
+          try TBDAgentModelSetup.save(provider: provider, endpoint: provider.fixedEndpoint ?? "", apiKey: provider == .ollama ? "" : key,
+                                      model: model, registry: registry)
           agentKey = ""
         } catch { agentTest = error.localizedDescription; agentTesting = false; return }
       }
       agentTestOK = result.isOK
       agentTest = result.isOK ? "Works" : result.message
       agentTesting = false
+      agentCheckDue = true
       await refreshChecks()
     }
   }
@@ -295,17 +326,33 @@ final class TBDOnboardingController: ObservableObject {
   /// "Quit and reopen TBD" (spec "Self-relaunch"): macOS gives a new Screen recording grant only at the next start.
   /// A detached shell waits until this process has ended (30 s limit), then opens this same app bundle; never a
   /// second instance (shared database, Chat helper, signer socket). The normal quit path keeps the Listening guard.
+  /// macOS runs a quarantined app from Downloads or a disk image from a temporary "App Translocation" copy that is
+  /// gone when it quits: reopening that path fails (review dev.9 #1). The person moves TBD to Applications first.
+  static var isTranslocated: Bool { Bundle.main.bundlePath.contains("/AppTranslocation/") }
+
   func relaunch() {
+    guard !relaunching, !Self.isTranslocated else { return }
+    relaunching = true
     let pid = ProcessInfo.processInfo.processIdentifier
     machine.markRelaunch(pid: pid)
+    var openArgs = ["\"$0\""]
+    #if DEBUG
+      // The scripted fresh-identity run: the reopened TBD Dev keeps its separate identity.
+      if let variant = TBDIdentity.devVariant { openArgs = ["--env", "TBD_DEV_IDENTITY=\(variant)"] + openArgs }
+    #endif
     let helper = Process()
     helper.executableURL = URL(fileURLWithPath: "/bin/sh")
-    helper.arguments = ["-c", "i=0; while kill -0 \"$1\" 2>/dev/null && [ \"$i\" -lt 150 ]; do sleep 0.2; i=$((i+1)); done; exec /usr/bin/open \"$0\"",
+    // Opens TBD again only when this process really ended within 30 s; a cancelled quit (Listening guard) opens
+    // nothing (review dev.9 #4).
+    helper.arguments = ["-c", "i=0; while kill -0 \"$1\" 2>/dev/null && [ \"$i\" -lt 150 ]; do sleep 0.2; i=$((i+1)); done; "
+                          + "[ \"$i\" -lt 150 ] && exec /usr/bin/open \(openArgs.joined(separator: " "))",
                         Bundle.main.bundlePath, String(pid)]
-    do { try helper.run() } catch { print("TBD onboarding: relauncher failed: \(error)"); return }
+    do { try helper.run() } catch { relaunching = false; print("TBD onboarding: relauncher failed: \(error)"); return }
     print("TBD onboarding: quitting to reopen for Screen recording (pid \(pid))")
     AppDelegate.allowTermination = true
     NSApp.terminate(nil)
+    // Still running: the quit was cancelled. The person can try again.
+    relaunching = false
   }
 
   // MARK: Step 4: models
@@ -325,7 +372,9 @@ struct TBDOnboardingView: View {
   @ObservedObject private var speech = TBDSpeechModelSetup.shared
   @ObservedObject private var providers: ProvidersSettingsViewModel
 
-  init(flow: TBDOnboardingController = .shared) {
+  @MainActor init() { self.init(flow: .shared) }
+
+  @MainActor init(flow: TBDOnboardingController) {
     self.flow = flow
     self.providers = flow.providers
   }
@@ -333,10 +382,17 @@ struct TBDOnboardingView: View {
   var body: some View {
     GeometryReader { geo in
       VStack(alignment: .leading, spacing: TBDKit.s5) {
-        VStack(alignment: .leading, spacing: TBDKit.s1) {
-          Text("Set up TBD").font(TBDTokens.Typography.title).foregroundStyle(TBDColor.ink)
-          Text("Everything TBD needs, before you start. A \"No\" is fine: you can change every answer later.")
-            .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+        HStack(alignment: .top) {
+          VStack(alignment: .leading, spacing: TBDKit.s1) {
+            Text("Set up TBD").font(TBDTokens.Typography.title).foregroundStyle(TBDColor.ink)
+            Text("Everything TBD needs, before you start. A \"No\" is fine: you can change every answer later.")
+              .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+          }
+          Spacer(minLength: TBDKit.s4)
+          // Edit mode after the first run (a link or "Review setup"): leave without other changes.
+          if flow.canCloseEdit {
+            Button("Back to TBD") { flow.closeEdit() }.buttonStyle(TBDButtonStyle(.quiet))
+          }
         }
         TBDStepFlow(steps: steps,
                     current: Binding(get: { flow.step.index }, set: { flow.move(to: $0) }),
@@ -412,11 +468,11 @@ struct TBDOnboardingView: View {
     VStack(alignment: .leading, spacing: TBDKit.s5) {
       question("Use TBD with your Teal Brick workspace?")
       HStack(spacing: TBDKit.s3) {
-        choice("Yes, sign in", "Workspace agents, teams, Save to Knowledge.", selected: flow.choices.portal == .yes) { flow.answer { $0.portal = .yes } }
-        choice("No", "TBD works on this Mac only. You can sign in later.", selected: flow.choices.portal == .no) { flow.answer { $0.portal = .no } }
+        choice("Yes, sign in", "Workspace agents, teams, Save to Knowledge.", selected: flow.portalAnswer == .yes) { flow.answer { $0.portal = .yes } }
+        choice("No", "TBD works on this Mac only. You can sign in later.", selected: flow.portalAnswer == .no) { flow.answer { $0.portal = .no } }
       }
       .fixedSize(horizontal: false, vertical: true)
-      if flow.choices.portal == .yes {
+      if flow.portalAnswer == .yes {
         if account.signedIn {
           panel {
             HStack(spacing: TBDKit.s2) {
@@ -472,7 +528,8 @@ struct TBDOnboardingView: View {
     VStack(alignment: .leading, spacing: TBDKit.s3) {
       Text("2. Choose a workspace").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink)
       if account.workspaces.isEmpty {
-        Text("Loading your workspaces…").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+        Text(account.busy ? "Loading your workspaces…" : "No workspace found for this account. Create one in the Portal, then come back.")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
       }
       ForEach(account.workspaces) { ws in
         choice(ws.name, ws.id == account.activeWorkspace ? "Chosen" : "", selected: ws.id == account.activeWorkspace) {
@@ -488,11 +545,11 @@ struct TBDOnboardingView: View {
     VStack(alignment: .leading, spacing: TBDKit.s4) {
       question("Run TBD's own agent on this Mac?")
       HStack(spacing: TBDKit.s3) {
-        choice("Yes", "An agent in Chat that can use your timeline and notes.", selected: flow.choices.agent == .yes) { flow.answer { $0.agent = .yes } }
-        choice("No", "Chat shows only your workspace agents.", selected: flow.choices.agent == .no) { flow.answer { $0.agent = .no } }
+        choice("Yes", "An agent in Chat that can use your timeline and notes.", selected: flow.agentAnswer == .yes) { flow.answer { $0.agent = .yes } }
+        choice("No", "Chat shows only your workspace agents.", selected: flow.agentAnswer == .no) { flow.answer { $0.agent = .no } }
       }
       .fixedSize(horizontal: false, vertical: true)
-      if flow.choices.agent == .yes {
+      if flow.agentAnswer == .yes {
         fieldRow("Agent") {
           TBDTag("TBD's agent", status: .live)
           Text("Codex, Eve and LangChain: coming later").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
@@ -509,7 +566,7 @@ struct TBDOnboardingView: View {
           }
         }
         panel { agentModelPanel }
-        if flow.choices.portal == .yes, account.signedIn { panel { pairingPanel } }
+        if account.signedIn { panel { pairingPanel } }
       }
     }
   }
@@ -517,7 +574,7 @@ struct TBDOnboardingView: View {
   private var agentModelPanel: some View {
     VStack(alignment: .leading, spacing: TBDKit.s3) {
       if flow.agentRuntime == .local {
-        Text("Ollama on this Mac. TBD does not download this model; run \"ollama pull <model>\" in Terminal.")
+        Text("Ollama on this Mac. TBD does not download this model. In Terminal, run: ollama pull \(flow.agentModel.trimmingCharacters(in: .whitespaces))")
           .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
       } else {
         HStack(spacing: TBDKit.s3) {
@@ -603,6 +660,10 @@ struct TBDOnboardingView: View {
       Spacer(minLength: TBDKit.s4)
       if granted {
         TBDTag("Allowed", status: .live)
+      } else if p == .screenRecording && flow.screenRequested && TBDOnboardingController.isTranslocated {
+        Text("Move TBD to Applications, quit it and open it again. macOS turns on screen recording then.")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: 320, alignment: .trailing)
       } else if p == .screenRecording && flow.screenRequested {
         VStack(alignment: .trailing, spacing: TBDKit.s1) {
           HStack(spacing: TBDKit.s2) {
