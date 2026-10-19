@@ -37,23 +37,31 @@ public enum TBDCaptureWorkflow: String, CaseIterable, Identifiable, Sendable {
 struct TBDListeningSettingsView: View {
     let section: String
     let context: TBDListeningContext
+    /// false when the host already scrolls (Models › Advanced puts this under its own content).
+    var scrolls = true
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                switch TBDListeningSettingsSection.resolve(section) {
-                case .capture: TBDCaptureSettings(context: context)
-                case .engine: TBDEngineSettings(context: context)
-                case .ai: TBDAISettings(); TBDKnowledgeSettings()
-                case .dictation: TBDDictationSettings(context: context)
-                case .meetings: TBDMeetingSettings(context: context)
-                case .system: TBDSystemSettings(context: context)
-                }
-            }
-            .font(TBDTokens.Typography.body)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, TBDTokens.Space.lg)   // the host's pane header sits above (TBD-UX-01)
+        if scrolls {
+            ScrollView(.vertical, showsIndicators: false) { content }
+        } else {
+            content
         }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            switch TBDListeningSettingsSection.resolve(section) {
+            case .capture: TBDCaptureSettings(context: context)
+            case .engine: TBDEngineSettings(context: context)
+            case .ai: TBDAISettings(); TBDKnowledgeSettings()
+            case .dictation: TBDDictationSettings(context: context)
+            case .meetings: TBDMeetingSettings(context: context)
+            case .system: TBDSystemSettings(context: context)
+            }
+        }
+        .font(TBDTokens.Typography.body)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, TBDTokens.Space.lg)   // the host's pane header sits above (TBD-UX-01)
     }
 }
 

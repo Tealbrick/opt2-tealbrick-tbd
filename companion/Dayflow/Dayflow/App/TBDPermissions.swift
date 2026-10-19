@@ -81,7 +81,6 @@ struct TBDPermissionsView: View {
   @ObservedObject private var permissions = TBDPermissions.shared
   var body: some View {
     VStack(alignment: .leading, spacing: TBDKit.s5) {
-      Text("Permissions").font(TBDTokens.Typography.title).foregroundStyle(TBDColor.ink)
       Text("Access is granted to TBD on this Mac and shared across its features. Portal sign-in does not grant or revoke these permissions.")
         .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
       row("Microphone", permissions.microphone, "Chat dictation, Listen and microphone meetings.")

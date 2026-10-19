@@ -33,13 +33,11 @@ struct SettingsView: View {
       case .permissions: return "lock.shield"
       case .storage: return "internaldrive"
       case .privacy: return "eye.slash"
-      case .providers: return "network"
       case .aiTools: return "wrench.and.screwdriver"
       case .data: return "square.and.arrow.up"
       case .other: return "slider.horizontal.3"
       case .capture: return "mic"
-      case .engine: return "cpu"
-      case .audioAI: return "waveform"
+      case .engine, .providers, .audioAI: return "cpu"   // one Models item (TBD-UX-01)
       case .audioSystem: return "gearshape"
       }
     }
@@ -48,12 +46,16 @@ struct SettingsView: View {
   @State private var selectedTab: SettingsTab
   init(initialSection: String = "account") {
     _selectedTab = State(initialValue: SettingsTab(rawValue: initialSection) ?? .account)
+    #if DEBUG
+      // The pane enum and the shared route table must name the same sections (design shots run DEBUG).
+      assert(
+        SettingsTab.allCases.map(\.rawValue).sorted() == TBDSettingsRoute.sections.sorted(),
+        "SettingsTab and TBDSettingsRoute.sections differ")
+    #endif
   }
   private var listeningSection: String? {
     switch selectedTab {
     case .capture: return TBDListeningSettingsSection.capture.rawValue
-    case .engine: return nil
-    case .audioAI: return nil
     case .audioSystem: return TBDListeningSettingsSection.system.rawValue
     default: return nil
     }
@@ -71,7 +73,7 @@ struct SettingsView: View {
     contentWithSheets
       .onReceive(NotificationCenter.default.publisher(for: Notification.Name("tbdListeningSettingsTabChanged"))) { note in
         guard listeningSection != nil, let section = note.object as? String else { return }
-        selectedTab = section == "ai" ? .audioAI : section == "system" ? .audioSystem : SettingsTab(rawValue: section) ?? .capture
+        selectedTab = SettingsTab(rawValue: section) ?? .capture
       }
   }
 
@@ -179,7 +181,9 @@ struct SettingsView: View {
   /// TBDMetrics.settingsContentMax and centred beyond it.
   private var settingsContent: some View {
     VStack(alignment: .leading, spacing: TBDKit.s5) {
-      SettingsPaneHeader(title: currentItem.title, subtitle: currentItem.subtitle)
+      SettingsPaneHeader(
+        title: String(localized: String.LocalizationValue(currentItem.title)),
+        subtitle: String(localized: String.LocalizationValue(currentItem.subtitle)))
         .padding(.top, TBDKit.s6)
       pane
     }
@@ -226,7 +230,7 @@ struct SettingsView: View {
           TBDNavSection(group.title) {
             ForEach(group.items, id: \.self) { item in
               let tab = SettingsTab(rawValue: item.section) ?? .account
-              TBDNavItem(item.title, symbol: tab.symbol, current: currentItem == item, ringed: false) {
+              TBDNavItem(String(localized: String.LocalizationValue(item.title)), symbol: tab.symbol, current: currentItem == item, ringed: false) {
                 withAnimation(TBDMotion.quick) { selectedTab = tab }
               }
               .pointingHandCursor()

@@ -62,9 +62,9 @@ public final class TBDListeningRuntime: ObservableObject {
     }
 
     /// Sections: `TBDListeningSettingsSection` raw values ("capture", "engine", "ai", "dictation", "meetings", "system").
-    public func settingsContent(section: String) -> AnyView {
+    public func settingsContent(section: String, scrolls: Bool = true) -> AnyView {
         guard let context else { return AnyView(EmptyView()) }
-        return AnyView(TBDListeningSettingsView(section: section, context: context).environmentObject(context.env))
+        return AnyView(TBDListeningSettingsView(section: section, context: context, scrolls: scrolls).environmentObject(context.env))
     }
 
     /// Refuses to quit while speech is being captured or saved.

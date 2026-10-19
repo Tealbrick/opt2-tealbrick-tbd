@@ -28,9 +28,14 @@ struct TBDModelsView: View {
         Text("Speech recognition runs locally. Select engines and downloads below.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
         TBDListeningRuntime.shared.settingsContent(section: "engine")
       case "Advanced":
-        Text("Existing provider-specific settings remain available. Shared task routes take precedence when assigned.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
-        DisclosureGroup { screenSettings() } label: { Text("Screen analysis providers").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink) }
-        TBDListeningRuntime.shared.settingsContent(section: "ai")
+        // One scroll for the page: the providers block can be long when opened (TBD-UX-01 review).
+        ScrollView(.vertical, showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 18) {
+            Text("Existing provider-specific settings remain available. Shared task routes take precedence when assigned.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
+            DisclosureGroup { screenSettings() } label: { Text("Screen analysis providers").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink) }
+            TBDListeningRuntime.shared.settingsContent(section: "ai", scrolls: false)
+          }
+        }
       default:
         ScrollView(.vertical, showsIndicators: false) {
           VStack(alignment: .leading, spacing: 22) {
