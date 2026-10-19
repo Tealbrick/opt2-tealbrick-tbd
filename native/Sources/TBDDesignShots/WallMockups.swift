@@ -562,17 +562,17 @@ struct WallMockup: View {
     // MARK: restored cards
 
     private var rosterSummary: some View {
-        let others = roster.filter { !$0.own }
-        func count(_ s: WallAgent.State) -> Int { others.filter { $0.state == s }.count }
+        // TBD counts: it is a workspace agent on the wall and in the list, so the numbers match the rows (Coordinator nit).
+        func count(_ s: WallAgent.State) -> Int { roster.filter { $0.state == s }.count }
         return VStack(alignment: .leading, spacing: TBDTokens.Space.sm) {
-            TBDLabel("Agents in your workspace")
-            Text("\(others.count)").font(TBDFonts.nunito(TBDKit.textNumeral, TBDKit.weightHead)).tracking(-1).foregroundStyle(TBDColor.ink)
+            TBDLabel("Agents on the wall")
+            Text("\(roster.count)").font(TBDFonts.nunito(TBDKit.textNumeral, TBDKit.weightHead)).tracking(-1).foregroundStyle(TBDColor.ink)
             HStack(spacing: TBDTokens.Space.xl) {
                 metric("\(count(.online))", "online")
                 metric("\(count(.paused))", "paused", color: count(.paused) > 0 ? TBDColor.brickInk : nil)
                 metric("\(count(.offline))", "offline")
             }
-            Text("TBD, your own agent, is always on the wall.").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+            Text("TBD, your own agent, is one of them. It is always on the wall.").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
         }
     }
 
