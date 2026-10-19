@@ -202,7 +202,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
     StoragePathMigrator.migrateIfNeeded()
 
     let appSupport = fileMgr.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    let baseDir = appSupport.appendingPathComponent(TBDIdentity.folder("TBD") + "/Companion", isDirectory: true)
+    let baseDir = appSupport.appendingPathComponent(TBDIdentity.dataFolder + "/Companion", isDirectory: true)
     let recordingsDir = baseDir.appendingPathComponent("recordings", isDirectory: true)
     let backupDir = baseDir.appendingPathComponent("backups", isDirectory: true)
 

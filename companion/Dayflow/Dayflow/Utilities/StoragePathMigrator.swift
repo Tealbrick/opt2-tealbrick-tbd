@@ -5,7 +5,8 @@ enum StoragePathMigrator {
   private static let migrationFlagKey = "didMigrateFromSandbox"
 
   static func migrateIfNeeded() {
-    guard Bundle.main.bundleIdentifier != "com.tealbrick.tbd" else { return }
+    // TBD never ran sandboxed (only the Dayflow donor did): skip for the live identity.
+    guard Bundle.main.bundleIdentifier != TBDIdentity.liveBundleID else { return }
     let defaults = UserDefaults.standard
     if defaults.bool(forKey: migrationFlagKey) {
       print("ℹ️ StoragePathMigrator: skipping – already migrated")
@@ -39,7 +40,7 @@ enum StoragePathMigrator {
       return
     }
 
-    let destinationBase = newSupport.appendingPathComponent(TBDIdentity.folder("TBD") + "/Companion", isDirectory: true)
+    let destinationBase = newSupport.appendingPathComponent(TBDIdentity.dataFolder + "/Companion", isDirectory: true)
 
     let normalizedLegacy = legacyBase.standardizedFileURL.path
     let normalizedDestination = destinationBase.standardizedFileURL.path

@@ -2,6 +2,6 @@
 #include? "LocalSecrets.xcconfig"
 
 // App identity used by Info.plist. These are the live values (Release). The Debug configuration of the TBD target
-// overrides them in the project (TBD Dev, com.tealbrick.tbd.dev, tealbrick-tbd-dev): see TBDIdentity (TBDModels).
+// overrides them in the project (TBD Dev, com.tealbrick.desktop.dev, tealbrick-desktop-dev): see TBDIdentity (TBDModels).
 TBD_DISPLAY_NAME = TBD
-TBD_URL_SCHEME = tealbrick-tbd
+TBD_URL_SCHEME = tealbrick-desktop

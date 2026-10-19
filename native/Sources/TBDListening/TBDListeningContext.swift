@@ -54,14 +54,6 @@ final class TBDListeningContext {
         dictation.settingsChanged()
         meetings.start()
         retention.start()
-        if let database = env.database {
-            // One-time import of the earlier version's library, off the main thread.
-            Task { [weak self] in
-                let outcome = await Task.detached(priority: .utility) { TBDLegacyImport.runAtStart(into: database) }.value
-                if outcome.changed { self?.env.changed() }
-                if let message = outcome.message { self?.runtime?.report(message) }
-            }
-        }
         Task { await env.speech.warmUp() }
     }
 

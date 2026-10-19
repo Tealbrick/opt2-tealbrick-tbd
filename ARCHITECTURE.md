@@ -5,7 +5,7 @@ State: verified against the repo on 2026-10-17. Claims cite paths in this repo. 
 ## 1. Three aspects
 
 - **Chat** (`chat/`): a React 19 renderer in a WKWebView plus a bundled Node 24 helper over private stdio (JSON lines). The helper holds the person session (`portal.ts`), the agent identity (`agentIdentity.ts`, `signerSocket.ts`), the default agent, the relay launcher, update checks and "Save to Knowledge". The default agent (Claude Agent SDK) and the relay are esbuilt into `out/tbd/agent.mjs` and `out/tbd/relay.mjs`. Model setup supports local Ollama first, then Anthropic.
-- **Companion** (`companion/Dayflow`): screen timeline, daily and weekly review, a `dayflow` helper, and an agent write channel (a Unix socket under `~/Library/Application Support/TBD/Companion/`, mode 0600, only while "Allow edits" is on).
+- **Companion** (`companion/Dayflow`): screen timeline, daily and weekly review, a `dayflow` helper, and an agent write channel (a Unix socket under `~/Library/Application Support/com.tealbrick.desktop/Companion/`, mode 0600, only while "Allow edits" is on).
 - **Listen** (`native/`): offline speech to text (Parakeet through FluidAudio, WhisperKit alternative), library (SQLite through GRDB), dictation, meetings, vocabulary, transforms, "Save to Knowledge".
 
 ## 2. Identity and credentials
@@ -22,7 +22,7 @@ Updater (`TBDUpdater.swift`, `chat/src/main/updates.ts`): checks every 24 hours,
 
 ## 4. Local data (paths from code; the file layout inside each folder is not listed)
 
-`~/Library/Application Support/TBD/` (Companion, Listening, helper state; `TBD-dev` for the dev identity), `~/Library/Logs/TBD`, `~/Documents/TBD`, UserDefaults `com.tealbrick.tbd`, keychain services `tealbrick.person`, `tealbrick.agent.<con>`, `com.tealbrick.tbd.models`. Permissions requested: screen recording, microphone, audio capture, calendars, Apple Events. Network: Portal, the bridge, the update feed, model endpoints the person chose, and the `yt-dlp` download on first use (verified against SHA2-256SUMS, not bundled).
+TBD v2 has its own identity (C280 C10, C284): bundle id `com.tealbrick.desktop`; `~/Library/Application Support/com.tealbrick.desktop/` (Companion, Listening, Chat helper state; `com.tealbrick.desktop-dev` for the dev identity), the agent workspace next to it in `com.tealbrick.desktop-agent/Workspace` (the data folder stays fully denied to the agent), the agent signer socket in a private `$TMPDIR/tbd-<hash>/` folder (Unix socket paths must fit 104 bytes), `~/Library/Logs/com.tealbrick.desktop`, `~/Documents/TBD Desktop`, UserDefaults `com.tealbrick.desktop`, keychain services `com.tealbrick.desktop.person`, `com.tealbrick.desktop.agent.<con>`, `com.tealbrick.desktop.models`, `com.tealbrick.desktop.chat`, `com.tealbrick.desktop.companion.apikeys`. The archived v1 app (`com.tealbrick.tbd`, `Application Support/TBD`, `TBD Agent`, `Dayflow`) is never read or written; the agent's file policy denies it. Permissions requested: screen recording, microphone, audio capture, calendars, Apple Events. Network: Portal, the bridge, the update feed, model endpoints the person chose, and the `yt-dlp` download on first use (verified against SHA2-256SUMS, not bundled).
 
 ## 5. Design
 

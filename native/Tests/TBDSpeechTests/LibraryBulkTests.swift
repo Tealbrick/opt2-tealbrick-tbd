@@ -130,69 +130,6 @@ final class LibraryBulkTests: XCTestCase {
         XCTAssertEqual(try db.transcription(id: fresh.id)?.isFavorite, true)
     }
 
-    // MARK: Legacy import
-
-    private func makeLegacyLibrary(at url: URL) throws {
-        let queue = try DatabaseQueue(path: url.path)
-        try queue.write { db in
-            try db.create(table: "transcriptions") { t in
-                t.column("id", .text).primaryKey()
-                t.column("createdAt", .text).notNull()
-                t.column("fileName", .text).notNull()
-                t.column("status", .text).notNull()
-                t.column("updatedAt", .text).notNull()
-                t.column("sourceType", .text).notNull().defaults(to: "file")
-                t.column("isFavorite", .boolean).notNull().defaults(to: false)
-            }
-            for (id, name, favorite) in [("0b1c6f7e-2222-4a3b-9c8d-000000000001", "Starred talk", true),
-                                          ("0b1c6f7e-2222-4a3b-9c8d-000000000002", "Plain talk", false),
-                                          ("0b1c6f7e-2222-4a3b-9c8d-000000000003", "Starred meeting", true)] {
-                try db.execute(sql: "INSERT INTO transcriptions (id, createdAt, fileName, status, updatedAt, sourceType, isFavorite) VALUES (?, ?, ?, 'completed', ?, ?, ?)",
-                               arguments: [id, self.at(0), name, self.at(0), name.contains("meeting") ? "meeting" : "file", favorite])
-            }
-        }
-        try queue.close()
-    }
-
-    func testImportCarriesTheEarlierFavoriteFlag() throws {
-        let legacy = dir.appendingPathComponent("macparakeet.db")
-        try makeLegacyLibrary(at: legacy)
-        let db = try memoryDatabase()
-        let report = try TBDLegacyImport.run(legacyURL: legacy, into: db, now: at(100))
-        XCTAssertEqual(report.imported, [.transcripts: 2, .meetings: 1])
-        XCTAssertEqual(report.favorites, 2)
-        let stars = try db.transcriptions(sort: .title).map { [$0.title, String($0.isFavorite)] }
-        XCTAssertEqual(stars, [["Plain talk", "false"], ["Starred meeting", "true"], ["Starred talk", "true"]])
-        XCTAssertEqual(try db.transcriptions(favoritesOnly: true, sort: .title).map(\.title), ["Starred meeting", "Starred talk"])
-        let marker = try XCTUnwrap(db.writer.read { try String.fetchOne($0, sql: "SELECT summary FROM legacyImport") })
-        XCTAssertTrue(marker.hasSuffix(" errors=0 favorites=2"), marker)
-        // Nothing left to copy after a fresh import.
-        XCTAssertEqual(TBDLegacyImport.runAtStart(into: db, legacyURL: legacy), .init(message: nil, changed: false))
-    }
-
-    func testBackfillCopiesStarsOnceForAnImportMadeBeforeFavorites() throws {
-        let legacy = dir.appendingPathComponent("macparakeet.db")
-        try makeLegacyLibrary(at: legacy)
-        let db = try memoryDatabase()
-        try TBDLegacyImport.run(legacyURL: legacy, into: db, now: at(100))
-        // Make it look like an import from before favorites: no stars, marker without the favorites count.
-        try db.writer.write { db in
-            try db.execute(sql: "UPDATE transcription SET isFavorite = 0")
-            try db.execute(sql: "UPDATE legacyImport SET summary = REPLACE(summary, ' favorites=2', '')")
-        }
-        XCTAssertEqual(try db.transcriptions(favoritesOnly: true).count, 0)
-
-        XCTAssertEqual(TBDLegacyImport.runAtStart(into: db, legacyURL: legacy), .init(message: nil, changed: true))
-        XCTAssertEqual(try db.transcriptions(favoritesOnly: true, sort: .title).map(\.title), ["Starred meeting", "Starred talk"])
-        XCTAssertEqual(try db.writer.read { try String.fetchOne($0, sql: "SELECT summary FROM legacyImport") }?.hasSuffix(" favorites=2"), true)
-
-        // Runs once: a star the person removed later stays removed.
-        let talk = try XCTUnwrap(try db.transcriptions(favoritesOnly: true, sort: .title).last)
-        try db.setFavorite(id: talk.id, false)
-        XCTAssertEqual(try TBDLegacyImport.backfillLibraryMeta(legacyURL: legacy, into: db), 0)
-        XCTAssertEqual(try db.transcriptions(favoritesOnly: true).map(\.title), ["Starred meeting"])
-    }
-
     // MARK: Selection
 
     func testSelectionRules() {

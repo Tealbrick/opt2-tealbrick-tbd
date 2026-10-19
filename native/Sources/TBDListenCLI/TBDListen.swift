@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import TBDModels
 import TBDSpeech
 
 /// `tbd-listen`: local access to the TBD Listening library for scripts and TBD's default agent.
@@ -15,7 +16,7 @@ struct TBDListen: AsyncParsableCommand {
 }
 
 /// Preferences shared with the TBD app (engines, languages, Listening settings).
-let appPreferences = TBDListeningPreferences(defaults: UserDefaults(suiteName: "com.tealbrick.tbd") ?? .standard)
+let appPreferences = TBDListeningPreferences(defaults: UserDefaults(suiteName: TBDIdentity.liveBundleID) ?? .standard)
 
 func openLibrary(readOnly: Bool = true) throws -> TBDListeningDatabase {
     if !readOnly { return try TBDListeningDatabase() }

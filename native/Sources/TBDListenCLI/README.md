@@ -2,7 +2,7 @@
 
 Command-line access to TBD Listening: transcribe files, links and podcast episodes, query the
 library, manage models, engines, vocabulary, snippets and preferences. It shares the library
-(`~/Library/Application Support/TBD/Listening`) and the preferences (`com.tealbrick.tbd`) with
+(`~/Library/Application Support/com.tealbrick.desktop/Listening`) and the preferences (`com.tealbrick.desktop`) with
 the TBD app. Nothing leaves the Mac except: model downloads you ask for (`models download`),
 podcast lookups (iTunes Search/Lookup API, the show's RSS feed, the episode audio) and links you
 give to `transcribe`.

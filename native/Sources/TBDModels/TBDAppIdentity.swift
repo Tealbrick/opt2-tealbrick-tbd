@@ -2,36 +2,49 @@ import Foundation
 
 /// Which identity this process runs as: the owner's live TBD, or the DEBUG-only development copy ("TBD Dev").
 ///
-/// The one switch is the Debug build setting `PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.tbd.dev` (companion/Dayflow
+/// TBD v2 has its OWN identity and data (C280 C10, C284): bundle id `com.tealbrick.desktop`. It never reads or writes
+/// the archived v1 app's names (`com.tealbrick.tbd`, `~/Library/Application Support/TBD` and `Dayflow`); they stay
+/// untouched as reference only.
+///
+/// The one switch is the Debug build setting `PRODUCT_BUNDLE_IDENTIFIER = com.tealbrick.desktop.dev` (companion/Dayflow
 /// project, Debug configuration only). A DEBUG build running under that bundle id is the dev identity; every per-user
 /// location then gets a separate name, so the dev app never reads or writes the live app's data:
 ///
-/// - folders (`~/Library/Application Support/TBD`, `~/Library/Logs/TBD`, `~/Documents/TBD`): `folder("TBD")` → `TBD-dev`
-/// - Keychain services: `service("com.tealbrick.tbd.models")` → `com.tealbrick.tbd.models.dev`
-/// - UserDefaults: separate by bundle id (`com.tealbrick.tbd.dev`); no code uses the live suite in the app
+/// - folders (`~/Library/Application Support/com.tealbrick.desktop`, `~/Library/Logs/com.tealbrick.desktop`,
+///   `~/Documents/TBD Desktop`): `dataFolder` / `documentsFolder` → `<name>-dev`
+/// - Keychain services: `keychainService("models")` = `com.tealbrick.desktop.models` → `com.tealbrick.desktop.models.dev`
+/// - UserDefaults: separate by bundle id (`com.tealbrick.desktop.dev`); no code uses the live suite in the app
 ///
-/// `--design-shots <dir>` (DEBUG only) renders companion screens to PNG; it uses `TBD-dev-shots` so a run starts from
-/// its own demo data and never touches the dev person's data either.
+/// `--design-shots <dir>` (DEBUG only) renders companion screens to PNG; it uses `<name>-dev-shots` so a run starts
+/// from its own demo data and never touches the dev person's data either.
 ///
 /// Release builds compile the `#else` branches: `isDev` is the constant `false` and `folder(_:)` / `service(_:)` return
-/// their argument unchanged, so every call site resolves to the same literal it had before.
+/// their argument unchanged.
 public enum TBDIdentity {
-    public static let liveBundleID = "com.tealbrick.tbd"
-    public static let devBundleID = "com.tealbrick.tbd.dev"
+    public static let liveBundleID = "com.tealbrick.desktop"
+    public static let devBundleID = "com.tealbrick.desktop.dev"
+    /// The archived v1 app (reference only). TBD v2 never opens its data; the agent's file policy also denies it.
+    public static let archivedV1BundleID = "com.tealbrick.tbd"
+    public static let archivedV1Folders = ["TBD", "TBD Agent", "Dayflow"]
+
+    /// The app's per-user folder in Application Support and Logs (Apple's bundle-id convention).
+    public static let liveDataFolder = liveBundleID
+    /// The user-visible folder in ~/Documents (auto-saved transcripts).
+    public static let liveDocumentsFolder = "TBD Desktop"
 
     #if DEBUG
-    /// True in a DEBUG build running as `com.tealbrick.tbd.dev`.
+    /// True in a DEBUG build running as `com.tealbrick.desktop.dev`.
     public static let isDev: Bool = Bundle.main.bundleIdentifier == devBundleID
     /// True when the dev app was launched with `--design-shots <dir>`.
     public static let isDesignShots: Bool = isDev && CommandLine.arguments.contains("--design-shots")
 
-    /// A per-user folder name: `TBD` → `TBD-dev` (`TBD-dev-shots` in a design-shots run).
+    /// A per-user folder name: `name` → `name-dev` (`name-dev-shots` in a design-shots run).
     public static func folder(_ live: String) -> String {
         guard isDev else { return live }
         return live + (isDesignShots ? "-dev-shots" : "-dev")
     }
 
-    /// A Keychain service name: `com.tealbrick.tbd.chat` → `com.tealbrick.tbd.chat.dev`.
+    /// A Keychain service name: `x` → `x.dev`.
     public static func service(_ live: String) -> String { isDev ? live + ".dev" : live }
     #else
     public static let isDev = false
@@ -40,9 +53,18 @@ public enum TBDIdentity {
     @inline(__always) public static func service(_ live: String) -> String { live }
     #endif
 
-    /// `~/Library/Application Support/<folder(name)>`.
-    public static func applicationSupport(_ name: String = "TBD") -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(folder(name), isDirectory: true)
+    /// `com.tealbrick.desktop` (dev: `com.tealbrick.desktop-dev`).
+    public static var dataFolder: String { folder(liveDataFolder) }
+    /// `TBD Desktop` (dev: `TBD Desktop-dev`).
+    public static var documentsFolder: String { folder(liveDocumentsFolder) }
+    /// A Keychain service under the app's own bundle id: `keychainService("models")` = `com.tealbrick.desktop.models`.
+    public static func keychainService(_ name: String) -> String { service(liveBundleID + "." + name) }
+
+    /// `~/Library/Application Support/<dataFolder>` (or a sub-folder of it).
+    public static func applicationSupport(_ subfolder: String? = nil) -> URL {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(dataFolder, isDirectory: true)
+        guard let subfolder else { return root }
+        return root.appendingPathComponent(subfolder, isDirectory: true)
     }
 }

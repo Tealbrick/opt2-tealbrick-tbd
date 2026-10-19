@@ -181,8 +181,8 @@ final class AutoSaveTests: XCTestCase {
     // MARK: Folder helpers
 
     func testDefaultFoldersAndKeepingAChosenFolder() {
-        XCTAssertTrue(TBDAutoSaveConfig.defaultFolder(for: .transcription).path.hasSuffix("/Documents/TBD/Listening/Transcriptions"))
-        XCTAssertTrue(TBDAutoSaveConfig.defaultFolder(for: .meeting).path.hasSuffix("/Documents/TBD/Listening/Meetings"))
+        XCTAssertTrue(TBDAutoSaveConfig.defaultFolder(for: .transcription).path.hasSuffix("/Documents/TBD Desktop/Listening/Transcriptions"))
+        XCTAssertTrue(TBDAutoSaveConfig.defaultFolder(for: .meeting).path.hasSuffix("/Documents/TBD Desktop/Listening/Meetings"))
         let config = TBDListeningPreferences(defaults: defaults).autoSave(.transcription)
         XCTAssertTrue(config.setFolder(dir))
         XCTAssertEqual(config.ensureFolderConfigured()?.standardizedFileURL.path, dir.standardizedFileURL.path, "a chosen folder is kept")

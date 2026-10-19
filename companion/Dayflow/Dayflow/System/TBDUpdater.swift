@@ -196,7 +196,7 @@ enum TBDUpdateVerifier {
   /// The downloaded bundle must be this app and strictly newer than the running release version.
   static func checkBundleIsNewer(newInfo: [String: Any]?, currentInfo: [String: Any]?) throws {
     guard
-      newInfo?["CFBundleIdentifier"] as? String == "com.tealbrick.tbd",
+      newInfo?["CFBundleIdentifier"] as? String == TBDIdentity.liveBundleID,
       let new = releaseVersion(from: newInfo).flatMap(TBDSemver.init),
       let cur = releaseVersion(from: currentInfo).flatMap(TBDSemver.init), new > cur
     else { throw TBDUpdateError.versionNotNewer }
@@ -207,7 +207,7 @@ enum TBDUpdateVerifier {
     guard teamID.count == 10, teamID.allSatisfy({ $0.isASCII && ($0.isUppercase || $0.isNumber) })
     else { return nil }
     return
-      "anchor apple generic and identifier \"com.tealbrick.tbd\" and certificate leaf[subject.OU] = \"\(teamID)\""
+      "anchor apple generic and identifier \"\(TBDIdentity.liveBundleID)\" and certificate leaf[subject.OU] = \"\(teamID)\""
   }
 }
 
@@ -315,7 +315,7 @@ final class TBDUpdater: ObservableObject {
   @Published private(set) var state: State = .idle
   @Published private(set) var latest: TBDUpdateOffer?
 
-  private let logger = Logger(subsystem: "com.tealbrick.tbd", category: "updater")
+  private let logger = Logger(subsystem: TBDIdentity.liveBundleID, category: "updater")
   private let defaults = UserDefaults.standard
   private var started = false
   private var timer: Timer?

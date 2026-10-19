@@ -43,7 +43,7 @@ struct StatusMenuView: View {
       MenuRow(title: "Transcribe URL", systemImage: "link", action: { audioAction(.transcribeURL) })
       MenuRow(title: "Recover voice-note audio", systemImage: "folder", action: {
         performAfterMenuDismiss {
-          let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(TBDIdentity.folder("TBD") + "/Listening/VoiceNotes")
+          let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(TBDIdentity.dataFolder + "/Listening/VoiceNotes")
           if FileManager.default.fileExists(atPath: root.path) { NSWorkspace.shared.open(root) }
         }
       })

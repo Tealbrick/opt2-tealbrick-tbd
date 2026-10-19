@@ -150,6 +150,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  /// Closing the main window must not quit TBD (C280 C14, "set and forget"): it keeps running in the menu bar so
+  /// capture, Listen and Chat continue. SwiftUI otherwise terminates an app whose only scene is a `Window` when that
+  /// window closes (checked on dev.6, 2026-10-19). Ported from the v1 branch claude/close-to-menubar.
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    false
+  }
+
+  /// Dock icon click, or a second launch of the running app: bring the main window back.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    if !flag { MainWindowController.shared.showMainWindow() }
+    return true
+  }
+
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     // Cmd-Q means quit. Closing the window remains the background-use gesture.
     // Listening coordinates active meeting/voice-note completion before termination.

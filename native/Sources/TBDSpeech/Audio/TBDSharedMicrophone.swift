@@ -13,8 +13,8 @@ public final class TBDSharedMicrophone: @unchecked Sendable {
 
     private struct Subscriber { let handler: Handler; let onInterruption: (@Sendable (Error) -> Void)? }
 
-    private let log = Logger(subsystem: "com.tealbrick.tbd", category: "Microphone")
-    private let queue = DispatchQueue(label: "com.tealbrick.tbd.microphone")
+    private let log = Logger(subsystem: "com.tealbrick.desktop", category: "Microphone")
+    private let queue = DispatchQueue(label: "com.tealbrick.desktop.microphone")
     private let snapshotLock = NSLock()
     private var handlers: [Handler] = []
     private var subscribers: [Token: Subscriber] = [:]

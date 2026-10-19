@@ -47,8 +47,8 @@ final class TBDAccountCoordinator: ObservableObject {
       signedIn = session != nil
       hasCheckedSession = true
       email = session?["email"] as? String ?? ""
-      let expired = (session?["expiresAt"] as? Double ?? 0) < Date().timeIntervalSince1970 * 1000
-      status = signedIn ? (expired ? "Session saved · refresh needed" : "Signed in") : "Signed out"
+      // No local expiry (C7): Portal ends the session with a 401, which signs TBD out.
+      status = signedIn ? "Signed in" : "Signed out"
       error = ""
       if !signedIn { workspaces = []; activeWorkspace = "" }
       else if workspace || changed || profileChanged {

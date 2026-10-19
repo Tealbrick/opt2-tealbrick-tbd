@@ -56,7 +56,7 @@ final class Database {
     }
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return appSupport.appendingPathComponent("TBD/Companion/chunks.sqlite").path
+    return appSupport.appendingPathComponent(tbdAppDataFolder + "/Companion/chunks.sqlite").path
   }
 
   init(path: String) throws {

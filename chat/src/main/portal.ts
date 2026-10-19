@@ -115,14 +115,13 @@ export function createPortal(deps: PortalDeps) {
     return json as T;
   }
 
+  /**
+   * The saved session, never expired on a local clock (C280 C7): `expiresAt` is only the 24 h IDLE mark from the
+   * sign-in answer, and Core slides that window on every use (absolute limit 30 days). Portal decides: a 401 on any
+   * call ends the session (`read` below), so TBD stays signed in for as long as it is used.
+   */
   function current(): PersonSession | null {
-    const s = deps.store.load();
-    if (!s) return null;
-    if (s.expiresAt <= now()) {
-      deps.store.save(null);
-      return null;
-    }
-    return s;
+    return deps.store.load();
   }
 
   /** A K3 read. A 401 means Portal ended the session (revoked, idle): sign out locally. */

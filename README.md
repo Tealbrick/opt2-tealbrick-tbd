@@ -35,7 +35,7 @@ npm run typecheck && npm test && npm run lint
 npm run build     # vite renderer + Node helper + agent and relay bundles (esbuild)
 ```
 
-Native (macOS only): `scripts/assemble.sh` and `scripts/build.sh` (Release config, production identity, local signing identity). Debug builds use a separate identity ("TBD Dev", bundle `com.tealbrick.tbd.dev`, own folders and keychain services). Do not run development builds against live user data.
+Native (macOS only): `scripts/assemble.sh` and `scripts/build.sh` (Release config, production identity, local signing identity). Debug builds use a separate identity ("TBD Dev", bundle `com.tealbrick.desktop.dev`, own folders and keychain services). The live app is `com.tealbrick.desktop` (TBD v2's own identity; the archived v1 app `com.tealbrick.tbd` is never touched). Do not run development builds against live user data.
 
 ## Layout
 

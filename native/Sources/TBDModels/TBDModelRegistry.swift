@@ -69,7 +69,7 @@ public enum TBDModelTask: String, CaseIterable, Sendable {
 
 public final class TBDModelRegistry: @unchecked Sendable {
     public static let defaultsKey = "tbd.models.v2"
-    public static let keychainService = TBDIdentity.service("com.tealbrick.tbd.models")
+    public static let keychainService = TBDIdentity.keychainService("models")
     private let defaults: UserDefaults
     private let credentials: TBDSecretStore
     private static let lock = NSLock()

@@ -109,7 +109,7 @@ done < <(find "$APP" -type f -print0)
 echo "All Mach-O files: team $TEAM, hardened runtime, timestamped."
 
 # Don't let LaunchServices prefer this copy over the installed app for the
-# bundle id or the tealbrick-tbd:// URL scheme.
+# bundle id or the tealbrick-desktop:// URL scheme.
 "$LSREGISTER" -u "$APP" 2>/dev/null || true
 
 ZIP="$DIST/TBD-$VERSION-$BUILD.zip"
