@@ -20,13 +20,30 @@ export function holdProduct(tool: string): string | null {
 }
 
 /**
- * Operator Inbox unlocked → the Inbox holds overview (routing to one hold is design-only, C277 A3); otherwise the hold page
- * of the app that holds the call (`product`, default Connect). `issuer` is the active control plane profile's issuer (the
- * Portal URL).
+ * The Portal address a link may use: https only. Anything else (http, a missing host, text that is no address) gives null and
+ * so no link; TBD does not send the person to a page that is not encrypted.
  */
-export function holdLink(o: { issuer: string; ws: string; holdId: string; inboxUnlocked: boolean; product?: string | null }): string {
-  const base = `${o.issuer.replace(/\/+$/, "")}/w/${encodeURIComponent(o.ws)}/open`;
-  return o.inboxUnlocked
-    ? `${base}?product=inbox&path=/holds`
-    : `${base}?product=${encodeURIComponent(o.product || "connect")}&path=/holds/${encodeURIComponent(o.holdId)}`;
+function portalBase(issuer: string): string | null {
+  try {
+    const url = new URL(issuer.trim());
+    return url.protocol === "https:" && url.host ? issuer.trim().replace(/\/+$/, "") : null;
+  } catch { return null; }
+}
+
+/**
+ * The link "Open approval" opens, or null when none can be built. `issuer` is the active control plane profile's issuer (the
+ * Portal URL; https only) and `ws` the workspace TBD's agent is connected to (where its rules and relay apply).
+ *
+ * - Operator Inbox unlocked: the Inbox holds overview (routing to one hold is design-only, C277 A3).
+ * - The hold is Connect's (`product` is `connect`): Connect's hold page for this hold.
+ * - Any other app: the workspace home in Portal. TBD does not guess the hold route of an app (the Sidebar's approvals badge
+ *   opens the Portal too, since only counts are known); Portal shows the waiting approvals.
+ */
+export function holdLink(o: { issuer: string; ws: string; holdId: string; inboxUnlocked: boolean; product?: string | null }): string | null {
+  const root = portalBase(o.issuer);
+  if (!root || !o.ws) return null;
+  const home = `${root}/w/${encodeURIComponent(o.ws)}`;
+  if (o.inboxUnlocked) return `${home}/open?product=inbox&path=/holds`;
+  if (o.product === "connect") return `${home}/open?product=connect&path=/holds/${encodeURIComponent(o.holdId)}`;
+  return home;
 }

@@ -23,9 +23,10 @@ struct ConnectorsPortal {
     issuer: { TBDAccountCoordinator.shared.profiles.first { $0.id == TBDAccountCoordinator.shared.activeProfile }?.issuer ?? "" },
     workspace: { TBDAccountCoordinator.shared.activeWorkspace })
 
-  /// "Manage in Connect" (`newAccount` false) or "Connect a new account" (true); nil without a Portal address and workspace.
-  func connectLink(newAccount: Bool) -> URL? {
-    TBDConnectors.connectLink(issuer: issuer(), workspace: workspace(), newAccount: newAccount)
+  /// "Manage in Connect" (`newAccount` false) or "Connect a new account" (true); nil without an https Portal address and a
+  /// workspace. The workspace is the one TBD's agent is connected to (its rules and relay apply there), else the active one.
+  func connectLink(newAccount: Bool, agentWorkspace: String? = nil) -> URL? {
+    TBDConnectors.connectLink(issuer: issuer(), workspace: agentWorkspace ?? workspace(), newAccount: newAccount)
   }
 
   /// The person's own Portal (Open Portal).
@@ -53,7 +54,7 @@ struct SettingsConnectorsTabView: View {
       } else {
         gateSection(state.gate)
       }
-      if state.gate == .active || !state.choices.isEmpty {
+      if state.gate == .active || !state.choices.isEmpty || state.choicesIssue != nil {
         choicesSection(state)
       }
     }
@@ -133,8 +134,8 @@ struct SettingsConnectorsTabView: View {
           }
         }
         HStack(spacing: TBDKit.s3) {
-          linkButton("Manage in Connect", newAccount: false, prominent: true)
-          linkButton("Connect a new account", newAccount: true, prominent: false)
+          linkButton("Manage in Connect", newAccount: false, prominent: true, agentWorkspace: state.agentWorkspace)
+          linkButton("Connect a new account", newAccount: true, prominent: false, agentWorkspace: state.agentWorkspace)
         }
       }
     }
@@ -170,8 +171,8 @@ struct SettingsConnectorsTabView: View {
   }
 
   @ViewBuilder
-  private func linkButton(_ title: String, newAccount: Bool, prominent: Bool) -> some View {
-    let url = portal.connectLink(newAccount: newAccount)
+  private func linkButton(_ title: String, newAccount: Bool, prominent: Bool, agentWorkspace: String?) -> some View {
+    let url = portal.connectLink(newAccount: newAccount, agentWorkspace: agentWorkspace)
     SettingsPrimaryButton(title: title, systemImage: "arrow.up.right", isDisabled: url == nil, prominent: prominent) {
       if let url { NSWorkspace.shared.open(url) }
     }
@@ -186,10 +187,16 @@ struct SettingsConnectorsTabView: View {
       isFirst: state.gate != .active
     ) {
       VStack(alignment: .leading, spacing: TBDKit.s3) {
+        if let issue = state.choicesIssue {
+          TBDNotice(issue.line, tone: .needsYou)
+        }
         if state.choices.isEmpty {
-          Text(TBDConnectors.noChoicesLine)
-            .font(TBDTokens.Typography.hint)
-            .foregroundStyle(TBDColor.muted)
+          // A failed read is not "no choices": only an answer of an empty list says that.
+          if state.choicesIssue != .failed {
+            Text(TBDConnectors.noChoicesLine)
+              .font(TBDTokens.Typography.hint)
+              .foregroundStyle(TBDColor.muted)
+          }
         } else {
           VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(state.choices.enumerated()), id: \.element.id) { index, choice in

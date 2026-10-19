@@ -13,8 +13,13 @@ final class FakeConnectorsClient: ConnectorsClient {
 
   var accessValue: TBDAppAccess = .unlocked
   var connected = true
+  /// The workspace of the agent connection (nil only when `connected` is false).
+  var agentWorkspace: String? = "w1"
   var accountsResult: Result<TBDConnectorAccounts, Error> = .success(TBDConnectorAccounts(available: true))
   var rules: [TBDConnectorChoice] = []
+  /// The helper's flag for an unreadable choices file, and an error for a read that fails.
+  var unreadable = false
+  var choicesError: Error?
   private(set) var accessCalls = 0
   private(set) var connectionCalls = 0
   private(set) var accountCalls = 0
@@ -28,22 +33,26 @@ final class FakeConnectorsClient: ConnectorsClient {
   var choicesWaiter: CheckedContinuation<Void, Never>?
 
   func access() async -> TBDAppAccess { accessCalls += 1; return accessValue }
-  func agentConnected() async -> Bool { connectionCalls += 1; return connected }
+  func agentConnection() async -> ConnectorsAgent {
+    connectionCalls += 1
+    return ConnectorsAgent(connected: connected, workspace: connected ? agentWorkspace : nil)
+  }
   func accounts() async throws -> TBDConnectorAccounts {
     accountCalls += 1
     if holdAccounts { await withCheckedContinuation { accountsWaiter = $0 } }
     return try accountsResult.get()
   }
-  func choices() async throws -> [TBDConnectorChoice] {
+  func choices() async throws -> TBDConnectorChoices {
     choiceCalls += 1
+    if let choicesError { throw choicesError }
     let snapshot = rules
     if holdChoices { await withCheckedContinuation { choicesWaiter = $0 } }
-    return snapshot
+    return TBDConnectorChoices(choices: snapshot, unreadable: unreadable)
   }
-  func revoke(account: String, tool: String) async throws -> [TBDConnectorChoice] {
+  func revoke(account: String, tool: String) async throws -> TBDConnectorChoices {
     revokeCalls.append((account, tool))
     rules.removeAll { $0.account == account && $0.tool == tool }
-    return rules
+    return TBDConnectorChoices(choices: rules, unreadable: unreadable)
   }
 }
 
@@ -65,8 +74,8 @@ final class ConnectorsTests: XCTestCase {
 
   private let gmail = TBDConnectorAccount(id: "a1", label: "Work inbox", service: "gmail", kind: .asMe, access: .readUpdate)
   private let slack = TBDConnectorAccount(id: "a2", label: "Team Slack", service: "slack", kind: .asItself, access: .read)
-  private let send = TBDConnectorChoice(account: "Work inbox", tool: "GMAIL_SEND_EMAIL", decision: .always)
-  private let del = TBDConnectorChoice(account: "Team Slack", tool: "SLACK_DELETE", decision: .never)
+  private let send = TBDConnectorChoice(account: "work inbox", tool: "gmail_send_email", decision: .always)
+  private let del = TBDConnectorChoice(account: "team slack", tool: "slack_delete", decision: .never)
 
   private func makeStore(active: Bool = true) -> ConnectorsStore {
     ConnectorsStore(client: fake, account: { [account] in account!.key }, isAppActive: { active })
@@ -162,7 +171,7 @@ final class ConnectorsTests: XCTestCase {
     await waitUntil { store.state.loaded && !store.isRefreshing }
     XCTAssertEqual(store.state.accounts.map(\.label), ["Work inbox", "Team Slack"])
     XCTAssertEqual(store.state.accounts.map(\.access.words), ["Read + create + update", "Read"])
-    XCTAssertEqual(store.state.choices.map(\.text), ["Always allow · GMAIL_SEND_EMAIL · Work inbox", "Never allow · SLACK_DELETE · Team Slack"])
+    XCTAssertEqual(store.state.choices.map(\.text), ["Always allow · gmail_send_email · work inbox", "Never allow · slack_delete · team slack"])
     XCTAssertEqual(fake.choiceCalls, 1)
     store.pageDidDisappear()
   }
@@ -387,8 +396,8 @@ final class ConnectorsTests: XCTestCase {
     let ok = await store.remove(send)
     XCTAssertTrue(ok)
     XCTAssertEqual(fake.revokeCalls.count, 1)
-    XCTAssertEqual(fake.revokeCalls.first?.account, "Work inbox")
-    XCTAssertEqual(fake.revokeCalls.first?.tool, "GMAIL_SEND_EMAIL")
+    XCTAssertEqual(fake.revokeCalls.first?.account, "work inbox")
+    XCTAssertEqual(fake.revokeCalls.first?.tool, "gmail_send_email")
     XCTAssertEqual(store.state.choices, [del])
     let again = await store.remove(del)
     XCTAssertTrue(again)
@@ -428,6 +437,84 @@ final class ConnectorsTests: XCTestCase {
     XCTAssertEqual(fake.accessCalls + fake.accountCalls + fake.choiceCalls + fake.revokeCalls.count, 0)
     XCTAssertFalse(store.isPolling)
     XCTAssertEqual(store.state.accounts, [gmail])
+    store.pageDidDisappear()
+  }
+
+  // MARK: Remembered choices are local (N4, N5)
+
+  /// N4: the choices are a local file. They list although TBD's agent is not connected, and no relay call is made.
+  func testRememberedChoicesListWhileTheAgentIsNotConnected() async {
+    fake.connected = false
+    fake.rules = [send, del]
+    let store = makeStore()
+    store.pageDidAppear()
+    await waitUntil { store.state.loaded && !store.isRefreshing }
+    XCTAssertEqual(store.state.gate, .notConnected)
+    XCTAssertEqual(store.state.choices, [send, del], "listed although the agent is disconnected")
+    XCTAssertNil(store.state.choicesIssue)
+    XCTAssertEqual(fake.accountCalls, 0, "no relay call for an agent that is not connected")
+    XCTAssertEqual(fake.choiceCalls, 1)
+    // ...and they can be removed there too.
+    let ok = await store.remove(send)
+    XCTAssertTrue(ok)
+    XCTAssertEqual(store.state.choices, [del])
+    store.pageDidDisappear()
+  }
+
+  /// N4: a read that fails is not "no remembered choices".
+  func testAFailedChoicesReadSaysSoAndIsNotAnEmptyList() async {
+    fake.choicesError = FakeConnectorsClient.Failure(message: "the helper did not answer")
+    let store = makeStore()
+    store.pageDidAppear()
+    await waitUntil { store.state.loaded && !store.isRefreshing }
+    XCTAssertEqual(store.state.choicesIssue, .failed)
+    XCTAssertEqual(store.state.choicesIssue?.line, "TBD could not read your remembered choices.")
+    XCTAssertNotEqual(store.state.choicesIssue?.line, TBDConnectors.noChoicesLine)
+    XCTAssertEqual(store.state.choices, [])
+    // A later good answer clears the sentence; a later failure keeps the list of the last good answer.
+    fake.choicesError = nil
+    fake.rules = [send]
+    await store.refresh()
+    XCTAssertNil(store.state.choicesIssue)
+    XCTAssertEqual(store.state.choices, [send])
+    fake.choicesError = FakeConnectorsClient.Failure(message: "again")
+    await store.refresh()
+    XCTAssertEqual(store.state.choicesIssue, .failed)
+    XCTAssertEqual(store.state.choices, [send], "the last good list stays, with the sentence")
+    store.pageDidDisappear()
+  }
+
+  /// N5: the choices file was unreadable and TBD kept a copy: the pane says so.
+  func testAnUnreadableChoicesFileShowsTheKeptCopySentence() async {
+    fake.unreadable = true
+    let store = makeStore()
+    store.pageDidAppear()
+    await waitUntil { store.state.loaded && !store.isRefreshing }
+    XCTAssertEqual(store.state.choicesIssue, .unreadable)
+    XCTAssertEqual(store.state.choicesIssue?.line, "TBD could not read your remembered choices. It kept a copy.")
+    XCTAssertEqual(store.state.choices, [])
+    fake.unreadable = false
+    await store.refresh()
+    XCTAssertNil(store.state.choicesIssue, "gone once the file reads again")
+    store.pageDidDisappear()
+  }
+
+  /// N6: the Connect links go to the workspace of TBD's agent while it is connected, else to the active workspace.
+  func testTheLinksUseTheWorkspaceOfTheConnectedAgent() async {
+    answer([gmail])
+    fake.agentWorkspace = "agent_ws"
+    let store = makeStore()
+    store.pageDidAppear()
+    await waitUntil { store.state.loaded && !store.isRefreshing }
+    XCTAssertEqual(store.state.agentWorkspace, "agent_ws")
+    let portal = ConnectorsPortal(issuer: { "https://portal.example" }, workspace: { "active_ws" })
+    XCTAssertEqual(portal.connectLink(newAccount: false, agentWorkspace: store.state.agentWorkspace)?.absoluteString,
+                   "https://portal.example/w/agent_ws/open?product=connect&path=/configure#agents")
+    XCTAssertEqual(portal.connectLink(newAccount: true)?.absoluteString, "https://portal.example/w/active_ws/open?product=connect&path=/", "no agent: the active workspace")
+    fake.connected = false
+    await store.refresh()
+    XCTAssertNil(store.state.agentWorkspace)
+    XCTAssertNil(ConnectorsPortal(issuer: { "http://portal.example" }, workspace: { "w" }).connectLink(newAccount: false, agentWorkspace: "agent_ws"), "https only")
     store.pageDidDisappear()
   }
 

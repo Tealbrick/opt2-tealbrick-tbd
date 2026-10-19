@@ -5,7 +5,8 @@
 //  Settings › Connectors (dev.16, C280 C11, DESIGN-CONNECTORS §1, §4). What the pane shows: the gate (plan, agent
 //  connection, grant), the accounts Connect lets TBD's agent use, and the person's remembered choices. Every read goes
 //  through the Chat helper: `entitlements` and `agentConnection` (as everywhere), `connectAccounts` (TBD's own agent
-//  through the local relay; never the person's token) and `connectConsentList` / `connectConsentRevoke` (a local file).
+//  through the local relay; never the person's token) and `connectConsentList` / `connectConsentRevoke` (a local file: read
+//  whether or not TBD's agent is connected; a failed read says so and never reads as "no remembered choices").
 //
 //  Refresh: when the pane appears, every 5 minutes while it is visible, when the app gets focus, and after a workspace or
 //  account change. Never while the pane or its window is not visible, never while a refresh is running (no overlap).
@@ -19,17 +20,23 @@ import Foundation
 import TBDModels
 
 /// What the pane needs from the helper. The live one is `ConnectorsLiveClient`; tests use a fake.
+/// TBD's agent connection: whether it is connected, and to which workspace (where its rules and its relay apply).
+struct ConnectorsAgent: Equatable {
+  var connected: Bool
+  var workspace: String?
+}
+
 @MainActor
 protocol ConnectorsClient {
   /// The plan's answer for Connect in the active workspace; `.unknown` when it cannot be read.
   func access() async -> TBDAppAccess
-  func agentConnected() async -> Bool
+  func agentConnection() async -> ConnectorsAgent
   /// Throws the helper's plain sentence (timeout, pause, app error).
   func accounts() async throws -> TBDConnectorAccounts
-  /// The remembered choices of the workspace TBD's agent is connected to (a local file).
-  func choices() async throws -> [TBDConnectorChoice]
+  /// The remembered choices (a local file: read whether or not TBD's agent is connected). Throws when the helper cannot answer.
+  func choices() async throws -> TBDConnectorChoices
   /// Forgets one choice; returns the list that is left.
-  func revoke(account: String, tool: String) async throws -> [TBDConnectorChoice]
+  func revoke(account: String, tool: String) async throws -> TBDConnectorChoices
 }
 
 @MainActor
@@ -40,10 +47,11 @@ struct ConnectorsLiveClient: ConnectorsClient {
     return TBDEntitlements(helperValue: value).access(.connect)
   }
 
-  func agentConnected() async -> Bool {
-    guard TBDAccountCoordinator.shared.signedIn else { return false }
+  func agentConnection() async -> ConnectorsAgent {
+    guard TBDAccountCoordinator.shared.signedIn else { return ConnectorsAgent(connected: false, workspace: nil) }
     let value = try? await TBDChatRuntime.shared.accountCall("agentConnection") as? [String: Any]
-    return value?["connected"] as? Bool ?? false
+    let connected = value?["connected"] as? Bool ?? false
+    return ConnectorsAgent(connected: connected, workspace: connected ? value?["workspaceId"] as? String : nil)
   }
 
   func accounts() async throws -> TBDConnectorAccounts {
@@ -54,12 +62,12 @@ struct ConnectorsLiveClient: ConnectorsClient {
     return accounts
   }
 
-  func choices() async throws -> [TBDConnectorChoice] {
-    TBDConnectorChoice.list(helperValue: try await TBDChatRuntime.shared.accountCall("connectConsentList"))
+  func choices() async throws -> TBDConnectorChoices {
+    TBDConnectorChoices(helperValue: try await TBDChatRuntime.shared.accountCall("connectConsentList"))
   }
 
-  func revoke(account: String, tool: String) async throws -> [TBDConnectorChoice] {
-    TBDConnectorChoice.list(helperValue: try await TBDChatRuntime.shared.accountCall("connectConsentRevoke", args: [["account": account, "tool": tool]]))
+  func revoke(account: String, tool: String) async throws -> TBDConnectorChoices {
+    TBDConnectorChoices(helperValue: try await TBDChatRuntime.shared.accountCall("connectConsentRevoke", args: [["account": account, "tool": tool]]))
   }
 }
 
@@ -68,8 +76,12 @@ struct ConnectorsState: Equatable {
   var gate: TBDConnectorsGate
   /// The accounts of the last good check. Empty unless the gate is `.active`.
   var accounts: [TBDConnectorAccount] = []
+  /// The workspace of TBD's agent while it is connected: the Connect links go there (its rules and relay apply there).
+  var agentWorkspace: String?
   /// The remembered choices. Empty until the first answer for this account.
   var choices: [TBDConnectorChoice] = []
+  /// Why the choices may not be whole: the helper could not be asked, or the choices file was unreadable (a copy was kept).
+  var choicesIssue: TBDChoicesIssue?
   /// A failed refresh while the last answer is still shown (the list stays, the sentence says why it may be old).
   var notice: String?
   /// The first answer for this account arrived.
@@ -228,15 +240,16 @@ final class ConnectorsStore: ObservableObject {
     defer { inFlight = false }
     let revision = choicesRevision
     let access = await client.access()
-    var connected = false
+    var agent = ConnectorsAgent(connected: false, workspace: nil)
     var probe: TBDConnectorsProbe = .unanswered
     var found: [TBDConnectorAccount] = []
-    var rules: [TBDConnectorChoice]?
+    var rules: TBDConnectorChoices?
+    var choicesFailed = false
     // Paid for, or the plan is not known (unknown never locks: a working grant through the relay is proof). Never for a
     // locked or not-installed Connect.
     if access == .unlocked || access == .unknown {
-      connected = await client.agentConnected()
-      if connected {
+      agent = await client.agentConnection()
+      if agent.connected {
         do {
           let list = try await client.accounts()
           if list.available {
@@ -248,9 +261,11 @@ final class ConnectorsStore: ObservableObject {
         } catch {
           probe = .failed(error.localizedDescription)
         }
-        rules = try? await client.choices()
       }
+      // The remembered choices are a local file: read them whether or not the agent is connected.
+      do { rules = try await client.choices() } catch { choicesFailed = true }
     }
+    let connected = agent.connected
     // The pane or its window left, or the account changed, while the calls ran.
     guard canRead else { return }
     guard accountNow() == key else {
@@ -261,10 +276,18 @@ final class ConnectorsStore: ObservableObject {
     answerKey = key
     let decided = TBDConnectors.decide(access: access, agentConnected: connected, probe: probe)
     var next = ConnectorsState(gate: decided, accounts: decided == .active ? found : [], loaded: true)
+    next.agentWorkspace = connected ? agent.workspace : nil
     if choicesRevision == revision {
-      next.choices = rules ?? []
+      if let rules {
+        next.choices = rules.choices
+        next.choicesIssue = rules.unreadable ? .unreadable : nil
+      } else if choicesFailed {
+        next.choices = state.choices  // the list of the last good answer stays; the sentence says it may be old
+        next.choicesIssue = .failed
+      }
     } else {
       next.choices = state.choices  // a choice was forgotten while the calls ran: keep the newer list
+      next.choicesIssue = state.choicesIssue
     }
     // A failed check while the last answer is still good: keep the list, say why it may be old.
     if case .failed(let sentence) = decided, state.gate == .active, state.loaded {
@@ -286,7 +309,8 @@ final class ConnectorsStore: ObservableObject {
     do {
       let left = try await client.revoke(account: choice.account, tool: choice.tool)
       guard accountNow() == key else { return true }
-      state.choices = left
+      state.choices = left.choices
+      state.choicesIssue = left.unreadable ? .unreadable : nil
       return true
     } catch {
       return false

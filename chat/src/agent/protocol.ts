@@ -44,6 +44,11 @@ export interface AgentConfig {
   systemAppend?: string;
   /** OS sandbox for the shell tool (filePolicy.sandboxSettings, SEC-04). */
   sandbox?: Record<string, unknown>;
+  /**
+   * TEST ONLY: switches the Connect consent layer off in the agent process (negative control of the injection fixture,
+   * test/connect-injection.test.ts). The helper (main/services.ts) never sets it; test/connect-negative-control.test.ts checks that.
+   */
+  testNoConnectConsent?: boolean;
 }
 
 /** One question of the SDK's AskUserQuestion tool (1–4 per call; "Other" free text is always allowed). */
@@ -95,12 +100,17 @@ export interface ConnectAsk {
   op: string;
   /** The inner tool of a `tools_call`, else the op. The rule key. */
   tool: string;
-  /** The account label the call names, or "default". The rule key. */
+  /** The account label the call names (`arguments.connect_account` of a tools_call, `account` of a named op), or "(default account)". The rule key (the helper compares it trimmed and in lower case). */
   account: string;
   /** For the card: "Gmail", "Buzz", "Chat channel". */
   service: string;
   /** read | write | outward | destructive | money | unknown. */
   effect: string;
+  /**
+   * Set when the call needs no card: "read" (a read op, or a tool the search showed as read) or "repeat" (the exact repeat of
+   * a call the owner holds). The agent still sends the request: the helper checks the person's Never rules first.
+   */
+  free?: "read" | "repeat";
 }
 
 export type AgentToHelper =

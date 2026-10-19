@@ -337,9 +337,9 @@
       TBDConnectorAccount(id: "a4", label: "Company GitHub", service: "github", kind: .asItself, access: .read),
     ]
     static let choices: [TBDConnectorChoice] = [
-      TBDConnectorChoice(account: "Work inbox", tool: "GMAIL_SEND_EMAIL", decision: .always),
-      TBDConnectorChoice(account: "Studio Slack", tool: "SLACK_DELETE_MESSAGE", decision: .never),
-      TBDConnectorChoice(account: "default", tool: "GOOGLECALENDAR_CREATE_EVENT", decision: .always),
+      TBDConnectorChoice(account: "work inbox", tool: "gmail_send_email", decision: .always),
+      TBDConnectorChoice(account: "studio slack", tool: "slack_delete_message", decision: .never),
+      TBDConnectorChoice(account: "(default account)", tool: "googlecalendar_create_event", decision: .always),
     ]
 
     /// The first entry is the pane as the Settings shots show it; the others are the extra states.
@@ -357,6 +357,10 @@
         ("locked", store(ConnectorsState(gate: .locked, loaded: true))),
         ("install", store(ConnectorsState(gate: .install, loaded: true))),
         ("notconnected", store(ConnectorsState(gate: .notConnected, loaded: true))),
+        // The remembered choices are local: they list although TBD's agent is not connected (N4).
+        ("notconnected-choices", store(ConnectorsState(gate: .notConnected, choices: choices, loaded: true))),
+        ("choices-unreadable", store(ConnectorsState(gate: .active, accounts: mixed, choicesIssue: .unreadable, loaded: true))),
+        ("choices-failed", store(ConnectorsState(gate: .active, accounts: mixed, choices: choices, choicesIssue: .failed, loaded: true))),
         ("nogrant", store(ConnectorsState(gate: .noGrant("TBD's agent has no Connect access. In Portal, open your workspace, draw a line from TBD's agent to Connect, choose Read, then press Connect. Then open Connect and share an account with TBD's agent."), loaded: true))),
         ("failed", store(ConnectorsState(gate: .active, accounts: mixed, choices: choices, notice: "Connect did not answer in time. Try again.", loaded: true))),
       ]
@@ -365,10 +369,10 @@
     /// Never asked: a frozen store makes no call.
     private struct SeededClient: ConnectorsClient {
       func access() async -> TBDAppAccess { .unknown }
-      func agentConnected() async -> Bool { false }
+      func agentConnection() async -> ConnectorsAgent { ConnectorsAgent(connected: false, workspace: nil) }
       func accounts() async throws -> TBDConnectorAccounts { throw CocoaError(.userCancelled) }
-      func choices() async throws -> [TBDConnectorChoice] { throw CocoaError(.userCancelled) }
-      func revoke(account: String, tool: String) async throws -> [TBDConnectorChoice] { throw CocoaError(.userCancelled) }
+      func choices() async throws -> TBDConnectorChoices { throw CocoaError(.userCancelled) }
+      func revoke(account: String, tool: String) async throws -> TBDConnectorChoices { throw CocoaError(.userCancelled) }
     }
   }
 

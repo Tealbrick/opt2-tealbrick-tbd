@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 import type { LocalAsk as Ask } from "@shared/ipc";
+import { connectAnswers } from "@shared/connectButtons";
 import { Icon } from "./primitives";
 
 /**
@@ -36,7 +37,7 @@ export function LocalAskCard(): ReactNode {
     setQueue((q) => q.filter((x) => x.id !== current.id));
   };
 
-  // A Connect call (C11): Approve / Deny count once; Always allow / Never allow are remembered per account and tool.
+  // A Connect call (C11): Approve / Deny count once; Always allow (only for a write or outward tool) and Never allow are remembered per account and tool.
   if (current.connect) {
     const card = current.connect;
     return (
@@ -58,22 +59,17 @@ export function LocalAskCard(): ReactNode {
           </div>
         ))}
         {card.subject ? <div className="ask__who">Subject: {card.subject}</div> : null}
+        {card.attachments ? <div className="ask__who">{card.attachments}</div> : null}
         <div className="ask__who">{card.effectLine}</div>
+        {card.other ? <div className="ask__who">{card.other}</div> : null}
         {card.content ? <div className="ask__detail">{card.content}</div> : null}
 
         <div className="ask__actions">
-          <button type="button" className="btn btn--primary" onClick={() => answer(true, false)}>
-            Approve
-          </button>
-          <button type="button" className="btn" onClick={() => answer(false, false)}>
-            Deny
-          </button>
-          <button type="button" className="btn" onClick={() => answer(true, true)}>
-            Always allow
-          </button>
-          <button type="button" className="btn" onClick={() => answer(false, true)}>
-            Never allow
-          </button>
+          {connectAnswers(card).map((a) => (
+            <button key={a.label} type="button" className={a.primary ? "btn btn--primary" : "btn"} onClick={() => answer(a.allow, a.remember)}>
+              {a.label}
+            </button>
+          ))}
         </div>
         <div className="ask__more">{card.hint}</div>
         {queue.length > 1 ? <div className="ask__more">{queue.length - 1} more waiting</div> : null}

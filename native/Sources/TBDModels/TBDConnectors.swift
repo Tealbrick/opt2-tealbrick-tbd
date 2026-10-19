@@ -97,15 +97,50 @@ public struct TBDConnectorChoice: Equatable, Identifiable, Sendable {
 
     public var id: String { "\(account)\u{1F}\(tool)" }
 
-    /// "Always allow · GMAIL_SEND_EMAIL · Work inbox". The account the agent did not name reads "default account".
+    /// "Always allow · gmail_send_email · work inbox". The account the agent did not name reads "default account" (the helper
+    /// keeps it as the reserved "(default account)"; earlier versions kept "default").
     public var text: String {
-        let who = account.isEmpty || account == "default" ? "default account" : account
+        let who = account.isEmpty || account == "default" || account == "(default account)" ? "default account" : account
         return "\(decision == .always ? "Always allow" : "Never allow") · \(tool) · \(who)"
     }
 
     /// The helper's list (`[{account, tool, decision, at}]`); off-shape rows are dropped. Newest choices keep the helper's order.
     public static func list(helperValue: Any?) -> [TBDConnectorChoice] {
         (helperValue as? [Any] ?? []).compactMap { TBDConnectorChoice(helperValue: $0) }
+    }
+}
+
+/// Why the list of remembered choices may not be whole.
+public enum TBDChoicesIssue: Equatable, Sendable {
+    /// The helper could not be asked (timeout, pause, app error). Not the same as "no choices".
+    case failed
+    /// The choices file could not be read; TBD kept a copy and started with no choices.
+    case unreadable
+
+    public var line: String {
+        switch self {
+        case .failed: return TBDConnectors.choicesFailedLine
+        case .unreadable: return TBDConnectors.choicesUnreadableLine
+        }
+    }
+}
+
+/// The helper's answer to `connectConsentList` / `connectConsentRevoke`: `{ choices: [...], unreadable: Bool }`. The earlier
+/// shape, the bare list, still reads (no notice).
+public struct TBDConnectorChoices: Equatable, Sendable {
+    public var choices: [TBDConnectorChoice]
+    public var unreadable: Bool
+
+    public init(choices: [TBDConnectorChoice] = [], unreadable: Bool = false) {
+        self.choices = choices; self.unreadable = unreadable
+    }
+
+    public init(helperValue: Any?) {
+        if let object = helperValue as? [String: Any] {
+            self.init(choices: TBDConnectorChoice.list(helperValue: object["choices"]), unreadable: object["unreadable"] as? Bool ?? false)
+        } else {
+            self.init(choices: TBDConnectorChoice.list(helperValue: helperValue))
+        }
     }
 }
 
@@ -177,6 +212,8 @@ public enum TBDConnectors {
     public static let choicesTitle = "Your choices for TBD's agent"
     public static let choicesNote = "These are TBD's own permissions on this Mac. They are not Rules rules (that needs Rules)."
     public static let noChoicesLine = "No remembered choices."
+    public static let choicesFailedLine = "TBD could not read your remembered choices."
+    public static let choicesUnreadableLine = "TBD could not read your remembered choices. It kept a copy."
 
     /// The gate, from the plan (`connect`), the agent connection and the last accounts check. Table:
     /// - locked / install: that line, no helper call is needed.
@@ -208,7 +245,8 @@ public enum TBDConnectors {
 
     /// The Portal launcher link into Connect for the active workspace (Portal does the launch session; TBD never does):
     /// `<portal>/w/<ws>/open?product=connect&path=/configure#agents` (Manage in Connect) or `…&path=/` (Connect a new
-    /// account). nil without an http(s) Portal address or a workspace.
+    /// account). `workspace` is the workspace of TBD's agent when it is connected (where its rules and relay apply). nil
+    /// without an https Portal address or a workspace.
     public static func connectLink(issuer: String, workspace: String, newAccount: Bool) -> URL? {
         guard let base = portalBase(issuer), !workspace.isEmpty else { return nil }
         var allowed = CharacterSet.urlPathAllowed
@@ -218,7 +256,7 @@ public enum TBDConnectors {
         return URL(string: newAccount ? "\(head)/" : "\(head)/configure#agents")
     }
 
-    /// The person's own Portal (the active profile's issuer); the public Portal when no profile is loaded yet.
+    /// The person's own Portal (the active profile's issuer, https only); the public Portal when no profile is loaded yet.
     public static func portalURL(issuer: String) -> URL {
         if let base = portalBase(issuer), let url = URL(string: base) { return url }
         return URL(string: "https://portal.tealbrick.com")!
@@ -226,7 +264,7 @@ public enum TBDConnectors {
 
     private static func portalBase(_ issuer: String) -> String? {
         let trimmed = issuer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+        guard let url = URL(string: trimmed), url.scheme?.lowercased() == "https",
               url.host?.isEmpty == false else { return nil }
         var base = trimmed
         while base.hasSuffix("/") { base.removeLast() }

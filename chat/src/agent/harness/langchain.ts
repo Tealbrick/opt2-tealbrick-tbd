@@ -6,7 +6,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { describeToolCall, needsPermission, type AgentConfig, type AgentToHelper, type HelperToAgent } from "../protocol";
 import type { ContentBlock } from "../../shared/message";
 import { LISTENING_TOOLS, listeningFailure } from "../listeningDefs";
-import { connectOp, createConnectConsent, heldOfResult } from "../../main/connectConsent";
+import { createConnectConsent, heldOfRelayResult } from "../../main/connectConsent";
 import { describeError, runTurn } from "./langchainGraph";
 import { createChatModel } from "./langchainModels";
 import { fileSessionStore, type SessionStore } from "./langchainSessions";
@@ -29,8 +29,8 @@ const turns = new Map<string, AbortController>();
  * Connect consent (C280 C11): the effect of each Connect tool the agent found with connect__tools_search. It lives here,
  * in the agent process, because the search results pass through this process's tool seam (observe below). One per process.
  */
-const connect = createConnectConsent();
-const interactions = createInteractions(out, { needsPermission, describe: describeToolCall, connect: (tool, input) => connect.askOf(tool, input) });
+const connect = createConnectConsent(Date.now, { disabled: () => config?.testNoConnectConsent === true });
+const interactions = createInteractions(out, { needsPermission, describe: describeToolCall, connect: (tool, input) => connect.routeOf(tool, input) });
 const note = (text: string) => console.error(`[agent-langchain] ${text}`);
 
 /** MCP servers by family: started when a turn needs them, dropped when their connection is gone, backed off after a failure. */
@@ -106,8 +106,8 @@ async function turn(id: string, text: string, sessionId?: string, content?: Cont
         onToolError: (name, error) => mcp.toolFailed(name, error),
         observe: (name, input, result) => {
           connect.observe(name, input, result);
-          // A held Connect call gets the "Open approval" link in the Chat (the helper builds it).
-          const held = connectOp(name) !== null ? heldOfResult(result) : undefined;
+          // A held call of any Teal Brick app gets the "Open approval" link in the Chat (the helper builds it).
+          const held = heldOfRelayResult(name, result);
           if (held) {
             hooks.onActivity("Waiting for owner approval");
             out({ type: "event", id, event: { kind: "held", tool: name, holdId: held.holdId, expiresAt: held.expiresAt } });

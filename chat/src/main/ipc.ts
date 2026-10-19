@@ -11,6 +11,7 @@ import { connectMcp } from "@opt2-tealbrick/bridge";
 import { knowledgeSave, type KnowledgeSaveInput } from "./knowledgeSave";
 import { flowTaskBoardComplete, flowTaskBoardList } from "./flowTaskBoard";
 import { connectAccounts } from "./connectAccounts";
+import { consentListing, workspaceKey } from "./connectConsent";
 import { holdLink, holdProduct } from "./connectHold";
 import { dialog } from "../tbd/host";
 import { publicPersonSession } from "./portal";
@@ -240,14 +241,20 @@ export function registerIpc(): void {
     if (!signedIn()) throw new Error("Sign in to Teal Brick in TBD first.");
     return connectAccounts(taskBoardDeps());
   }));
-  // The person's "Always allow" / "Never allow" choices for the workspace TBD's agent is connected to (Settings › Connectors).
-  // Local file only (connect-consent.json); no Portal, no relay.
-  const consentRules = () => { const ws = consentWorkspace(); return ws ? consentStore().list(ws) : []; };
+  // The person's "Always allow" / "Never allow" choices (Settings › Connectors). Local file only (connect-consent.json); no Portal, no
+  // relay, so they list whether or not TBD's agent is connected: the workspace of the agent when it is connected, else the workspace
+  // that is selected. The answer is `{ choices, unreadable }`: `unreadable` is true when the file could not be read and TBD kept a copy.
+  const consentKey = (): string | null => {
+    const connected = consentWorkspace();
+    if (connected) return connected;
+    try { return workspaceKey(currentControlPlane().issuer, selectedPortalWorkspace()); } catch { return null; }
+  };
+  const consentRules = () => consentListing(consentStore(), consentKey());
   ipcMain.handle("studio:connectConsentList", () => consentRules());
   ipcMain.handle("studio:connectConsentRevoke", (_e, raw: unknown) => {
     const r = (raw ?? {}) as Record<string, unknown>;
     if (typeof r.account !== "string" || typeof r.tool !== "string") throw new Error("Choose the account and the tool to forget.");
-    const ws = consentWorkspace();
+    const ws = consentKey();
     if (ws) consentStore().revoke(ws, r.account, r.tool);
     return consentRules();
   });
@@ -306,8 +313,9 @@ export function registerIpc(): void {
   const turns = createTurnRouter({
     agent: () => getServices().agent,
     emit: (streamId, channel, payload) => { if (sendTo && !sendTo.isDestroyed()) sendTo.send(channel, { streamId, ...payload }); },
-    // "Open approval" for a held call of any app (C4): Inbox's holds overview when Operator Inbox is unlocked in the workspace the
-    // agent is connected to, else the hold page of the app that holds the call (the product in the tool name). A Portal launcher link; it opens in the system browser.
+    // "Open approval" for a held call of any app (C4), in the workspace the agent is connected to: Inbox's holds overview when Operator
+    // Inbox is unlocked there, Connect's hold page for a Connect hold, else the Portal workspace home. https only; no link when the
+    // agent is not connected. A Portal link; it opens in the system browser.
     holdUrl: (held) => {
       const c = getServices().agentIdentity.connection();
       if (!c) return null;

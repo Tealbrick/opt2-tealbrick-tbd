@@ -111,10 +111,41 @@ final class TBDConnectorsTests: XCTestCase {
         XCTAssertNil(TBDConnectors.connectLink(issuer: "https://portal.tealbrick.com", workspace: "", newAccount: false))
     }
 
+    /// N6: a link goes only to an https Portal; an http issuer gives no link, and the public Portal is the fallback to open.
+    func testOnlyAnHttpsPortalGetsALink() {
+        XCTAssertNil(TBDConnectors.connectLink(issuer: "http://portal.tealbrick.com", workspace: "ws_1", newAccount: false))
+        XCTAssertNil(TBDConnectors.connectLink(issuer: "http://localhost:3000", workspace: "ws_1", newAccount: true))
+        XCTAssertNil(TBDConnectors.connectLink(issuer: "HTTP://portal.tealbrick.com", workspace: "ws_1", newAccount: true))
+        XCTAssertNotNil(TBDConnectors.connectLink(issuer: "HTTPS://portal.tealbrick.com", workspace: "ws_1", newAccount: true))
+        XCTAssertEqual(TBDConnectors.portalURL(issuer: "http://portal.tealbrick.com").absoluteString, "https://portal.tealbrick.com")
+    }
+
     func testPortalURL() {
         XCTAssertEqual(TBDConnectors.portalURL(issuer: "https://dev.tealbrick.com/").absoluteString, "https://dev.tealbrick.com")
         XCTAssertEqual(TBDConnectors.portalURL(issuer: "").absoluteString, "https://portal.tealbrick.com")
         XCTAssertEqual(TBDConnectors.portalURL(issuer: "ftp://x").absoluteString, "https://portal.tealbrick.com")
+    }
+
+    // MARK: Remembered choices
+
+    func testChoicesTextNamesTheDefaultAccountForEveryKeptForm() {
+        for account in ["", "default", "(default account)"] {
+            XCTAssertEqual(TBDConnectorChoice(account: account, tool: "gmail_send_email", decision: .always).text, "Always allow · gmail_send_email · default account", account)
+        }
+        XCTAssertEqual(TBDConnectorChoice(account: "work inbox", tool: "gmail_send_email", decision: .never).text, "Never allow · gmail_send_email · work inbox")
+    }
+
+    func testChoicesAnswerReadsBothShapesAndTheUnreadableFlag() {
+        let row: [String: Any] = ["account": "work inbox", "tool": "gmail_send_email", "decision": "always", "at": "2026-10-20T00:00:00Z"]
+        let object = TBDConnectorChoices(helperValue: ["choices": [row, ["bad": 1]], "unreadable": true] as [String: Any])
+        XCTAssertEqual(object.choices.count, 1)
+        XCTAssertTrue(object.unreadable)
+        let list = TBDConnectorChoices(helperValue: [row])
+        XCTAssertEqual(list.choices.count, 1)
+        XCTAssertFalse(list.unreadable, "the earlier bare list has no notice")
+        XCTAssertEqual(TBDConnectorChoices(helperValue: nil), TBDConnectorChoices())
+        XCTAssertEqual(TBDChoicesIssue.failed.line, "TBD could not read your remembered choices.")
+        XCTAssertEqual(TBDChoicesIssue.unreadable.line, "TBD could not read your remembered choices. It kept a copy.")
     }
 
     // MARK: Helper shapes

@@ -153,22 +153,22 @@ export function consentWorkspace(): string | null {
 }
 
 /** One Connect call: the person's rules first, else the Connect card (Approve / Deny / Always allow / Never allow). */
-async function connectPermission(req: { tool: string; input: Record<string, unknown>; connect?: ConnectAsk }): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
+async function connectPermission(req: { tool: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
   return decideConnectCall(req, {
     store: consentStore(),
     workspace: consentWorkspace(),
-    askPerson: (card) => askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "connect-call", label: card.title, detail: "", connect: card }),
+    askPerson: (card) => askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "connect-call", label: card.title, detail: "", connect: card }, signal),
   });
 }
 
 /** One tool call: policy first, the person only when needed (SEC-04). */
-async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
-  if (req.connect || connectOp(req.tool) !== null) return connectPermission(req);
+async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
+  if (req.connect || connectOp(req.tool) !== null) return connectPermission(req, signal);
   const ctx = policyContext();
   const verdict = decide(req.tool, req.input, ctx);
   if (verdict.kind === "allow") return { allow: true };
   if (verdict.kind === "deny") return { allow: false, message: verdict.reason };
-  const answer = await askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "run-command", label: req.tool, detail: req.detail, folder: verdict.folder });
+  const answer = await askPerson({ id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent", action: "run-command", label: req.tool, detail: req.detail, folder: verdict.folder }, signal);
   if (answer.allow && answer.remember && verdict.folder) {
     try { addAgentFolder(verdict.folder); } catch { /* refused folder: still allowed once */ }
   }

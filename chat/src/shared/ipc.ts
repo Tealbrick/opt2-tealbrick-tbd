@@ -92,15 +92,23 @@ export interface ConnectCard {
   title: string;
   service: string;
   tool: string;
-  /** The account label the agent named, or "default". */
+  /** The account label the agent named, or "(default account)". */
   account: string;
   accountLine: string;
   effect: string;
   effectLine: string;
+  /** Every target argument that is present (who or where it goes); a list shows its count and its items (to ten). */
   target: { label: string; value: string }[];
   subject?: string;
   /** The first 300 characters of the content. */
   content?: string;
+  /** "Attachments: 2 files: a.pdf, b.txt", when the call names files. */
+  attachments?: string;
+  /** "Other arguments: key=value; …" (at most 600 characters): every argument shown nowhere else. */
+  other?: string;
+  /** Whether "Always allow" is offered (effect write or outward, not a first-contact tool). Approve, Deny and Never allow always are. */
+  alwaysOffered: boolean;
+  /** The line under the buttons: the Always hint, or "TBD asks every time for this kind of action." */
   hint: string;
 }
 
@@ -114,7 +122,7 @@ export interface LocalAsk {
   /** Set when "always" would add this folder to the agent's allow-list; absent = one-time consent only. */
   folder?: string | null;
   /**
-   * Set for a Connect call (action "connect-call"): the card has the four answers Approve / Deny / Always allow / Never allow.
+   * Set for a Connect call (action "connect-call"): the card has Approve / Deny / Never allow, and Always allow when `connect.alwaysOffered`.
    * They arrive in `localAnswer` as `{ allow, remember }`: Approve = allow, no remember; Deny = no allow, no remember;
    * Always allow = allow + remember; Never allow = no allow + remember.
    */

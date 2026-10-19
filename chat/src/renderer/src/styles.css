@@ -657,9 +657,9 @@ input, textarea { font: inherit; color: inherit; }
 .ask__detail {
   margin: 9px 0 0; padding: 8px 10px; border-radius: var(--tb-radius-brick);
   background: var(--surface); font-family: var(--tb-font-mono);
-  font-size: var(--fs-sm); word-break: break-all;
+  font-size: var(--fs-sm); word-break: break-all; overflow-wrap: anywhere;
 }
-.ask__who { margin-top: 9px; font-size: var(--fs-sm); color: var(--ink-secondary); }
+.ask__who { margin-top: 9px; font-size: var(--fs-sm); color: var(--ink-secondary); word-break: break-word; overflow-wrap: anywhere; }
 .ask__actions { display: flex; gap: 8px; margin-top: 12px; }
 .ask__more { margin-top: 9px; font-size: var(--fs-sm); color: var(--ink-tertiary); }
 

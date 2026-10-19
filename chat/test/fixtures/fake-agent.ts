@@ -16,7 +16,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (m.type === "turn" && m.text === "connect") {
     (globalThis as any).connecting = m;
-    return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "mcp__tealbrick__connect__tools_call", detail: "x", input: { tool: "GMAIL_SEND_EMAIL", arguments: {} }, connect: { op: "tools_call", tool: "GMAIL_SEND_EMAIL", account: "default", service: "Gmail", effect: "outward" } });
+    return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "mcp__tealbrick__connect__tools_call", detail: "x", input: { tool: "gmail_send_email", arguments: {} }, connect: { op: "tools_call", tool: "gmail_send_email", account: "default", service: "Gmail", effect: "outward" } });
   }
   if (m.type === "permission" && (globalThis as any).connecting) {
     const t = (globalThis as any).connecting;

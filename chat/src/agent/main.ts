@@ -1,10 +1,12 @@
 import { createInterface } from "node:readline";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { query, type Options, type McpServerConfig, type PermissionResult, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type HookCallback, type Options, type McpServerConfig, type PermissionResult, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { buildOptions, BRIDGE_SERVER_NAME, BRIDGE_TOOL_PATTERN } from "@opt2-tealbrick/harness-claude";
 import { AGENT_TOOLS, ASK_TOOL, describeToolCall, needsPermission, type AgentConfig, type AgentQuestion, type AgentToHelper, type ConnectAsk, type HelperToAgent } from "./protocol";
 import { createConnectConsent, heldOfResult } from "../main/connectConsent";
+import { connectPreToolUse } from "./connectHook";
+import { createRequestIds } from "./requestIds";
 import type { ContentBlock } from "../shared/message";
 import { listeningServer } from "./listeningTools";
 import { modelEnv } from "./modelEnv";
@@ -31,9 +33,10 @@ const permissions = new Map<string, (r: { allow: boolean; message?: string }) =>
  * in the agent process, because the search results pass through this process's hooks (PostToolUse below). One per
  * process; the Claude Agent SDK keeps one process for all turns of a session.
  */
-const connect = createConnectConsent();
+const connect = createConnectConsent(Date.now, { disabled: () => config?.testNoConnectConsent === true });
 const answers = new Map<string, (a: Record<string, string> | null) => void>();
-let nextReq = 0;
+/** Request ids carry a random nonce of THIS process (agent/requestIds.ts); the helper also drops replies for a replaced process. */
+const ids = createRequestIds();
 
 /** Harness-local tool servers (C5); the bridge relay is added by harness-claude. */
 function localServers(c: AgentConfig): Record<string, McpServerConfig> {
@@ -104,7 +107,7 @@ function options(c: AgentConfig, id: string, abort: AbortController, sessionId?:
 /** Send one permission request to the helper and wait for the person's (or the rules') decision. A stopped turn says no. */
 async function requestPermission(id: string, tool: string, input: Record<string, unknown>, signal: AbortSignal, connectAsk?: ConnectAsk): Promise<{ allow: boolean; message?: string }> {
   if (signal.aborted) return { allow: false, message: "Turn stopped." };
-  const reqId = `p${++nextReq}`;
+  const reqId = ids.permission();
   out({ type: "permission_request", id, reqId, tool, detail: describeToolCall(tool, input), input, ...(connectAsk ? { connect: connectAsk } : {}) });
   const decision = await new Promise<{ allow: boolean; message?: string }>((resolve) => {
     permissions.set(reqId, resolve);
@@ -116,9 +119,9 @@ async function requestPermission(id: string, tool: string, input: Record<string,
 
 /**
  * Connect consent in the Claude Agent SDK. The relay's tools (`mcp__tealbrick__*`) are on the SDK's allow list, so the
- * SDK never calls canUseTool for them: the decision is made in a PreToolUse hook instead. A Connect call that is not a
- * read (or a tools_call whose effect the agent never saw as `read`) goes to the helper, which applies the person's
- * Always/Never rules or shows the card; "deny" from the hook is final. Reads fall through to the allow list.
+ * SDK never calls canUseTool for them: the decision is made in a PreToolUse hook instead. EVERY Connect call goes to the
+ * helper (reads too, marked free): the helper applies the person's Never rules first, then lets a free call pass, then
+ * applies Always rules or shows the card; "deny" from the hook is final, and so is any error inside the hook (agent/connectHook.ts).
  * A PostToolUse hook teaches the effect cache from the search results (and the holds that let a repeat pass).
  * Timeout: the card gives up after two minutes in the helper (asks.ts); the hook waits a little longer.
  */
@@ -131,17 +134,10 @@ function connectHooks(id: string, existing: NonNullable<Options["hooks"]>): NonN
       {
         matcher: `${BRIDGE_TOOL_PATTERN}.*`,
         timeout: 300,
-        hooks: [async (hook, _toolUseId, { signal }) => {
-          if (hook.hook_event_name !== "PreToolUse") return {};
-          const tool = hook.tool_name;
-          const input = (hook.tool_input && typeof hook.tool_input === "object" ? hook.tool_input : {}) as Record<string, unknown>;
-          const ask = connect.askOf(tool, input);
-          if (!ask) return {};
-          const decision = await requestPermission(id, tool, input, signal, ask);
-          return decision.allow
-            ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
-            : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.message ?? "The person declined this action." } };
-        }],
+        hooks: [connectPreToolUse({
+          route: (tool, input) => connect.routeOf(tool, input),
+          request: (tool, input, signal, ask) => requestPermission(id, tool, input, signal, ask),
+        }) as unknown as HookCallback],
       },
     ],
     PostToolUse: [
@@ -173,7 +169,7 @@ function connectHooks(id: string, existing: NonNullable<Options["hooks"]>): NonN
 async function ask(id: string, input: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> {
   const questions = (Array.isArray(input.questions) ? input.questions : []) as AgentQuestion[];
   if (questions.length === 0) return { behavior: "deny", message: "No question to ask." };
-  const reqId = `q${++nextReq}`;
+  const reqId = ids.question();
   out({ type: "question", id, reqId, questions });
   const answer = await new Promise<Record<string, string> | null>((resolve) => {
     answers.set(reqId, resolve);

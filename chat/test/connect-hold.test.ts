@@ -28,11 +28,11 @@ test("a held event from the agent reaches onHeld", async () => {
 
 test("a Connect permission request carries the agent's ask to the helper; the remembered choice goes back", async () => {
   const seen: { tool: string; connect?: ConnectAsk }[] = [];
-  const agent = createDefaultAgent(agentDeps(async (req) => { seen.push({ tool: req.tool, connect: req.connect }); return { allow: false, message: "The person told TBD never to allow GMAIL_SEND_EMAIL for default.", remember: "never" }; }));
+  const agent = createDefaultAgent(agentDeps(async (req) => { seen.push({ tool: req.tool, connect: req.connect }); return { allow: false, message: "The person told TBD never to allow gmail_send_email for default.", remember: "never" }; }));
   try {
     const r = await agent.sendTurn({ text: "connect", onDelta: () => {}, onActivity: () => {} });
-    assert.deepEqual(seen, [{ tool: "mcp__tealbrick__connect__tools_call", connect: { op: "tools_call", tool: "GMAIL_SEND_EMAIL", account: "default", service: "Gmail", effect: "outward" } }]);
-    assert.deepEqual(JSON.parse(r.reply), { allow: false, message: "The person told TBD never to allow GMAIL_SEND_EMAIL for default.", remember: "never" });
+    assert.deepEqual(seen, [{ tool: "mcp__tealbrick__connect__tools_call", connect: { op: "tools_call", tool: "gmail_send_email", account: "default", service: "Gmail", effect: "outward" } }]);
+    assert.deepEqual(JSON.parse(r.reply), { allow: false, message: "The person told TBD never to allow gmail_send_email for default.", remember: "never" });
   } finally { agent.stop(); }
 });
 

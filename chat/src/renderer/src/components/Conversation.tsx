@@ -7,6 +7,7 @@ import {
 } from "../lib/attachments";
 import type { Block, PeerEvent } from "@shared/types";
 import { peerSummaryLabel, summarizePeerEvents } from "@shared/types";
+import { approvalLine } from "@shared/hold";
 import { useStore } from "@/lib/store";
 import * as composerDom from "@/lib/composerDom";
 import { Autocomplete, type Suggestion } from "./Autocomplete";
@@ -283,6 +284,7 @@ function HoldNotice({ block }: { block: Extract<Block, { kind: "hold" }> }): Rea
   return (
     <div className="ask">
       <div className="ask__title" style={{ marginBottom: 4 }}>{block.label}</div>
+      <div className="muted" style={{ marginBottom: 4 }}>{approvalLine(block.holdId)}</div>
       <div className="muted" style={{ marginBottom: 10 }}>The owner decides this in the app. TBD&apos;s agent repeats the call after the owner approves it.</div>
       <div className="ask__options">
         <button type="button" className="btn btn--primary" disabled={!block.url} onClick={() => block.url && void window.studio?.openExternal(block.url)}>
