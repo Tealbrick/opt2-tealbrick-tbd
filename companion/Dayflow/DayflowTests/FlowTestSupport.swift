@@ -89,10 +89,15 @@ class FlowTestCase: XCTestCase {
       url: folder.appendingPathComponent("Companion/flow.json"), clock: { clock.now }, makeID: { ids.next() })
   }
 
-  func makePlanner(store: TBDFlowStore? = nil, sound: @escaping () -> Void = {}) -> FlowPlanner {
+  func makePlanner(
+    store: TBDFlowStore? = nil, sound: @escaping () -> Void = {}, taskBoard: FlowTaskBoardSource? = nil,
+    cards: [TimelineCard] = []
+  ) -> FlowPlanner {
     let clock = self.clock
+    // The source is a fake that never asks the helper (no Keychain, no network); the card source is empty.
     return FlowPlanner(
-      store: store ?? makeStore(), mirror: mirror, defaults: defaults, calendar: Self.utc, now: { clock.now }, playSound: sound)
+      store: store ?? makeStore(), mirror: mirror, defaults: defaults, calendar: Self.utc, now: { clock.now }, playSound: sound,
+      taskBoard: taskBoard ?? FlowTaskBoardSource(client: FakeTaskBoardClient()), cardsForDay: { _ in cards })
   }
 
   func at(_ time: String) -> Date { TBDFlowISO.date("2026-10-05T\(time)Z")! }

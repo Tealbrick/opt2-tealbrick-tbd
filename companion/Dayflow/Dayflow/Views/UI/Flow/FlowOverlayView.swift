@@ -216,7 +216,7 @@ struct FlowOverlayView: View {
         HStack(spacing: 4) {
           pillText(String(localized: "Whoops! I'll get back to work."))
           Image(systemName: "chevron.down")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.system(size: 9, weight: .semibold))  // design-guard: allow (chevron glyph size, F3 baseline)
             .foregroundStyle(TBDColor.muted)
         }
       }

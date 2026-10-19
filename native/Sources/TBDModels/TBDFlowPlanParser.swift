@@ -11,9 +11,15 @@ public struct TBDFlowTaskDraft: Codable, Equatable, Sendable {
     public var day: String
     public var startAt: Date?
     public var endAt: Date?
+    /// F4: the Task Board issue this line is linked to (a pasted line whose title equals an open issue of the owner).
+    /// nil = the task stays on this Mac.
+    public var taskBoardID: String?
+    public var taskBoardProject: String?
 
-    public init(title: String, notes: String = "", subtasks: [String] = [], day: String, startAt: Date? = nil, endAt: Date? = nil) {
+    public init(title: String, notes: String = "", subtasks: [String] = [], day: String, startAt: Date? = nil, endAt: Date? = nil,
+                taskBoardID: String? = nil, taskBoardProject: String? = nil) {
         self.title = title; self.notes = notes; self.subtasks = subtasks; self.day = day; self.startAt = startAt; self.endAt = endAt
+        self.taskBoardID = taskBoardID; self.taskBoardProject = taskBoardProject
     }
 
     /// Length of the timebox in whole minutes; 0 when unknown.
@@ -273,7 +279,8 @@ extension TBDFlowStore {
                 let task = TBDFlowTask(
                     id: newID(), title: d.title, notes: d.notes,
                     subtasks: d.subtasks.map { TBDFlowSubtask(id: newID(), title: String($0.prefix(TBDFlowTask.maxTitle))) },
-                    day: d.day, startAt: d.startAt, endAt: d.endAt, createdAt: now)
+                    day: d.day, startAt: d.startAt, endAt: d.endAt, source: d.taskBoardID == nil ? .local : .taskBoard,
+                    taskBoardID: d.taskBoardID, taskBoardProject: d.taskBoardID == nil ? nil : d.taskBoardProject, createdAt: now)
                 try task.validate()
                 created.append(task)
             }

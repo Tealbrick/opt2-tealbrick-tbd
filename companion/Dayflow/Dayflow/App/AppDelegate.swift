@@ -154,6 +154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       // The observer is off until the person turns it on (Flow › Observer). Plug it in before the planner starts a session.
       FlowSessionMirror.shared.setObserver(FlowDistractionAgent.shared)
       FlowPlanner.shared.start()
+      FlowTaskBoardSource.shared.start()
       FlowCardLabeller.shared.start()
     }
 

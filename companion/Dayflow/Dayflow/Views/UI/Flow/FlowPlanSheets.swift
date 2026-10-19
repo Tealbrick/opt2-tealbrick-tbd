@@ -98,7 +98,7 @@ struct FlowPasteSheet: View {
   private func runPreview() {
     error = nil
     do {
-      preview = try planner.previewPlan(text: text, day: dayKey)
+      preview = planner.linked(try planner.previewPlan(text: text, day: dayKey))
     } catch {
       preview = nil
       self.error = error.localizedDescription
@@ -131,6 +131,13 @@ struct FlowPasteSheet: View {
           Text("\(index + 1).").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
           VStack(alignment: .leading, spacing: 2) {
             Text(draft.title).font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink)
+            if planner.taskBoard.isTaskBoard {
+              Text(
+                draft.taskBoardID == nil
+                  ? "Only on this Mac" : "Task Board" + (draft.taskBoardProject.map { " · \($0)" } ?? "")
+              )
+              .font(TBDTokens.Typography.hint).foregroundStyle(draft.taskBoardID == nil ? TBDColor.muted : TBDColor.tealInk)
+            }
             if let start = draft.startAt {
               Text(
                 FlowTodayView.clockText(start) + (draft.endAt.map { " – " + FlowTodayView.clockText($0) } ?? "")

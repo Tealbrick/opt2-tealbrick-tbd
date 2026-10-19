@@ -100,6 +100,7 @@
       NSApplication.shared.setActivationPolicy(.prohibited)
       let seeded = DemoSeed.seed()
       let flow = FlowShotsSeed.planner()
+      let flowBoard = FlowShotsSeed.taskBoardPlanner()
       let observerShots = FlowShotsSeed.observerScreens()
       defer { observerShots.cleanUp() }
       // Creates the Listening context on the demo root (no start: no capture, hotkeys, downloads), so Settings → Listen
@@ -144,6 +145,16 @@
             FlowView(planner: flow, tab: tab, showsTasklistImport: true).background(TBDColor.tile), size: main, dark: dark,
             name: "flow-\(name)-\(theme)")
         }
+        // Flow (F4): Today with Task Board as the source ("Looks done" row, source labels), and the Add from Task Board sheet.
+        try render(
+          FlowView(planner: flowBoard, tab: .today, showsTasklistImport: false).background(TBDColor.tile), size: main, dark: dark,
+          name: "flow-today-taskboard-\(theme)")
+        try render(
+          FlowTaskBoardSheet(
+            planner: flowBoard, picked: ["iss_weekly", "iss_q4"], times: ["iss_weekly": "16:00 – 16:30"], onDone: { _ in }
+          )
+          .padding(TBDKit.s8).background(TBDColor.tile),
+          size: CGSize(width: 900, height: 560), dark: dark, name: "flow-add-from-taskboard-\(theme)")
         // The Observer tab (F3): text on this Mac (the mockup), a local vision model that is not downloaded yet, a cloud model.
         for screen in observerShots.screens {
           try render(
@@ -284,6 +295,50 @@
     }
 
     private final class Clock: @unchecked Sendable { var date: Date; init(_ d: Date) { date = d } }
+
+    /// F4: today's plan with Task Board as the source (mockup "today-taskboard"). A seeded source: no helper call, no
+    /// entitlement read, no Keychain.
+    static func taskBoardPlanner() -> FlowPlanner {
+      let calendar = Calendar.current
+      let base = calendar.startOfDay(for: Date())
+      func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
+        calendar.date(bySettingHour: hour, minute: minute, second: second, of: base) ?? base
+      }
+      let clock = Clock(at(10, 12))
+      let url = TBDIdentity.applicationSupport("FlowShotsTaskBoard").appendingPathComponent("flow.json")
+      let store = TBDFlowStore(url: url, clock: { clock.date })
+      let day = TBDFlowDay.string(from: base, calendar: calendar)
+      do {
+        let release = try store.addTask(
+          title: "Release TBD dev.13", day: day, startAt: at(8, 30), endAt: at(9, 40), source: .taskBoard, taskBoardID: "iss_release",
+          taskBoardProject: "TBD")
+        try store.setStatus(id: release.id, .done)
+        let mockups = try store.addTask(
+          title: "Flow mockups for Martin", day: day, startAt: at(9, 40), endAt: at(11, 30), source: .taskBoard, taskBoardID: "iss_flow",
+          taskBoardProject: "TBD")
+        let reply = try store.addTask(
+          title: "Reply to Eyal about the design review", day: day, startAt: at(11, 30), endAt: at(11, 45), source: .taskBoard,
+          taskBoardID: "iss_reply", taskBoardProject: "Ops")
+        try store.markLooksDone(id: reply.id, at: at(11, 41))
+        try store.addTask(title: "Weekly review", day: day, startAt: at(16, 0), endAt: at(16, 30))
+        try store.startFocus(taskID: mockups.id, mode: .focus, minutes: 25)
+      } catch {
+        print("tbd design shots: flow task board seed failed: \(error)")
+      }
+      clock.date = at(10, 18, 18)
+      let source = FlowTaskBoardSource()
+      source.seed(
+        mode: .taskBoard,
+        issues: [
+          TBDFlowTaskBoardIssue(id: "iss_flow", title: "Flow mockups for Martin", project: "TBD", status: .inProgress, priority: "high", ready: false),
+          TBDFlowTaskBoardIssue(id: "iss_weekly", title: "Weekly review", project: "Ops", status: .todo, priority: "medium", ready: true),
+          TBDFlowTaskBoardIssue(id: "iss_q4", title: "Draft the Q4 pricing page", project: "Website", status: .todo, priority: "medium", ready: true),
+          TBDFlowTaskBoardIssue(id: "iss_penpot", title: "Answer the Penpot licence question", project: "Ops", status: .todo, priority: "low", ready: true),
+        ])
+      let planner = FlowPlanner(store: store, now: { clock.date }, taskBoard: source, cardsForDay: { _ in [] })
+      planner.load()
+      return planner
+    }
 
     static func planner() -> FlowPlanner {
       let calendar = Calendar.current

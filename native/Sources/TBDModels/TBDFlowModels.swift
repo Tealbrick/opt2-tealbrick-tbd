@@ -130,15 +130,20 @@ public struct TBDFlowTask: Codable, Equatable, Identifiable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
     public var completedAt: Date?
+    /// F4: the observer thinks a Task Board task is done. Nothing is written to Task Board; the person decides. nil = no
+    /// such hint. Old files have no such field and load as nil.
+    public var looksDoneAt: Date?
+    /// F4: the person answered "Not yet" at this time; the hint stays away for `TBDFlowStore.looksDoneRetry`.
+    public var looksDoneDismissedAt: Date?
 
     public init(id: String, title: String, notes: String = "", subtasks: [TBDFlowSubtask] = [], status: TBDFlowTaskStatus = .todo,
                 day: String, startAt: Date? = nil, endAt: Date? = nil, source: TBDFlowTaskSource = .local,
                 taskBoardID: String? = nil, taskBoardProject: String? = nil, createdAt: Date, updatedAt: Date? = nil,
-                completedAt: Date? = nil) {
+                completedAt: Date? = nil, looksDoneAt: Date? = nil, looksDoneDismissedAt: Date? = nil) {
         self.id = id; self.title = title; self.notes = notes; self.subtasks = subtasks; self.status = status; self.day = day
         self.startAt = startAt; self.endAt = endAt; self.source = source; self.taskBoardID = taskBoardID
         self.taskBoardProject = taskBoardProject; self.createdAt = createdAt; self.updatedAt = updatedAt ?? createdAt
-        self.completedAt = completedAt
+        self.completedAt = completedAt; self.looksDoneAt = looksDoneAt; self.looksDoneDismissedAt = looksDoneDismissedAt
     }
 
     /// Length of the timebox in whole minutes; 0 when it has no start or no end (unknown, as in Tasklist).

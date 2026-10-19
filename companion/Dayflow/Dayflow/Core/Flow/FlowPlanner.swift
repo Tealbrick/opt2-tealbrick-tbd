@@ -8,8 +8,19 @@
 //
 
 import AppKit
+import Combine
 import Foundation
 import TBDModels
+
+/// What a Task Board task row shows while a "Mark done on Task Board" tap is running (F4).
+enum FlowTaskBoardRowState: Equatable {
+  /// The call is on its way.
+  case working
+  /// The owner has to approve first ("Waiting for owner approval").
+  case waiting(String)
+  /// The call failed: the sentence shown on the row. The task stays open.
+  case failed(String)
+}
 
 @MainActor
 final class FlowPlanner: ObservableObject {
@@ -30,12 +41,19 @@ final class FlowPlanner: ObservableObject {
   @Published private(set) var clock: Date
   /// The last thing that went wrong, in the words the page shows (v1 `connection`). Cleared by the next action.
   @Published var notice: String?
+  /// Task id → what its "Mark done on Task Board" tap is doing (F4). Absent = nothing running.
+  @Published private(set) var taskBoardRows: [String: FlowTaskBoardRowState] = [:]
+
+  /// Where the list comes from (F4): Task Board when licensed, connected and granted, else this Mac.
+  let taskBoard: FlowTaskBoardSource
 
   private let mirror: FlowSessionMirror
   private let defaults: UserDefaults
   private let calendar: Calendar
   private let now: () -> Date
   private let playSound: () -> Void
+  private let cardsForDay: (String) -> [TimelineCard]
+  private var forwarding: AnyCancellable?
   private var timer: Timer?
   /// True while this planner owns the mirror's session (it started it, so it must end it).
   private(set) var ownedSession = false
@@ -43,7 +61,9 @@ final class FlowPlanner: ObservableObject {
   init(
     store: TBDFlowStore? = nil, mirror: FlowSessionMirror? = nil, defaults: UserDefaults = .standard,
     calendar: Calendar = .current, now: @escaping () -> Date = { Date() },
-    playSound: @escaping () -> Void = { NSSound(named: "Ping")?.play() }
+    playSound: @escaping () -> Void = { NSSound(named: "Ping")?.play() },
+    taskBoard: FlowTaskBoardSource? = nil,
+    cardsForDay: @escaping (String) -> [TimelineCard] = { StorageManager.shared.fetchTimelineCards(forDay: $0) }
   ) {
     self.store = store ?? TBDFlowStore()
     self.mirror = mirror ?? .shared
@@ -51,7 +71,11 @@ final class FlowPlanner: ObservableObject {
     self.calendar = calendar
     self.now = now
     self.playSound = playSound
+    self.taskBoard = taskBoard ?? .shared
+    self.cardsForDay = cardsForDay
     self.clock = now()
+    // The page watches the planner only: a changed source or issue list redraws it.
+    forwarding = self.taskBoard.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     load()
   }
 
@@ -62,6 +86,11 @@ final class FlowPlanner: ObservableObject {
     guard timer == nil else { return }
     mirror.onGoalsCompleted = { [weak self] goals in
       for goal in goals { self?.detectedCompletion(taskID: goal.id) }
+    }
+    // Only tasks that were really checked off get the "Checked off" toast; a Task Board task gets "Looks done" instead.
+    mirror.goalsToAnnounce = { [weak self] goals in
+      guard let self else { return goals }
+      return goals.filter { goal in self.tasks.first(where: { $0.id == goal.id })?.source != .taskBoard }
     }
     tick()
     timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -170,9 +199,20 @@ final class FlowPlanner: ObservableObject {
 
   /// The observer saw `taskID` finished on screen: tick it off. The creature's "Checked off: <title>" toast comes from
   /// the mirror (v1), which respects quiet mode.
+  ///
+  /// F4: a Task Board task is NOT written. Its row gets "Looks done" with "Mark done on Task Board" / "Not yet"; only the
+  /// person's tap writes (`completeOnTaskBoard`). "Not yet" keeps the hint away for 30 minutes.
   func detectedCompletion(taskID: String) {
     guard let task = tasks.first(where: { $0.id == taskID }), task.status != .done, task.status != .cancelled else { return }
-    run { try store.setStatus(id: taskID, .done) }
+    guard task.source == .taskBoard else {
+      run { try store.setStatus(id: taskID, .done) }
+      return
+    }
+    let isNew = (try? store.markLooksDone(id: taskID, at: now())) ?? false
+    refresh()
+    if isNew, settings.overlay, FlowAgentSettings.savedAlertStyle(defaults) != .quiet {
+      mirror.toast(String(localized: "Looks done: \(task.title). Mark it done on Task Board when you are ready."))
+    }
   }
 
   // MARK: - Page actions
@@ -192,8 +232,85 @@ final class FlowPlanner: ObservableObject {
     }
   }
 
+  /// A Task Board task that is not done: ticking it asks first ("Mark done on Task Board?"), then writes.
+  func needsTaskBoardConfirm(_ task: TBDFlowTask) -> Bool {
+    task.source == .taskBoard && task.taskBoardID != nil && task.status != .done && task.status != .cancelled
+  }
+
   func toggleDone(_ task: TBDFlowTask) {
     run { try store.setStatus(id: task.id, task.status == .done ? .todo : .done) }
+  }
+
+  // MARK: - Task Board (F4)
+
+  /// Minutes the timeline put on this task today (effective labels: person > model > rule). 0 is allowed.
+  func minutesOnPlan(for task: TBDFlowTask) -> Int {
+    let current = now()
+    let day = FlowCardLabeller.companionDay(current, calendar: calendar)
+    let plan = tasks.filter { $0.day == task.day && $0.status != .cancelled }
+    let cards = cardsForDay(day).compactMap { FlowCardLabeller.evidence(for: $0, calendar: calendar) }
+    let minutes = TBDFlowMatcher.minutesPerTask(labels: store.cardLabels, cards: cards, tasks: plan)[task.id] ?? 0
+    return Int(minutes.rounded())
+  }
+
+  /// The person tapped "Mark done on Task Board" (after the inline confirm). Writes ONE call through TBD's agent; on
+  /// success the local task is done too. A hold shows "Waiting for owner approval" on the row; an error shows its
+  /// sentence on the row and the task stays open.
+  func completeOnTaskBoard(_ task: TBDFlowTask) async {
+    guard needsTaskBoardConfirm(task), let issue = task.taskBoardID else { return }
+    if case .working = taskBoardRows[task.id] { return }
+    if case .waiting = taskBoardRows[task.id] { return }
+    let id = task.id
+    taskBoardRows[id] = .working
+    let result = TBDFlowTaskBoardResult.text(minutesOnPlan: minutesOnPlan(for: task))
+    do {
+      _ = try await taskBoard.complete(issue: issue, result: result) { [weak self] message in
+        self?.taskBoardRows[id] = .waiting(message)
+      }
+      taskBoardRows[id] = nil
+      run { try store.setStatus(id: id, .done) }
+    } catch {
+      taskBoardRows[id] = .failed(error.localizedDescription)
+    }
+  }
+
+  /// "Not yet" on a "Looks done" row.
+  func dismissLooksDone(_ task: TBDFlowTask) {
+    run { try store.dismissLooksDone(id: task.id) }
+  }
+
+  func clearTaskBoardRow(_ task: TBDFlowTask) { taskBoardRows[task.id] = nil }
+
+  /// One pick of the "Add from Task Board" sheet: the issue, and the timebox the person typed (the times stay here).
+  struct TaskBoardPick {
+    var issue: TBDFlowTaskBoardIssue
+    var startAt: Date?
+    var endAt: Date?
+  }
+
+  /// Adds the picked issues to today as Task Board tasks (title snapshot, project, timebox). An issue already on today's
+  /// plan is skipped. Nothing is written to Task Board. Returns how many were added.
+  @discardableResult
+  func addFromTaskBoard(_ picks: [TaskBoardPick]) throws -> Int {
+    var added = 0
+    let existing = Set(tasks.filter { $0.day == todayKey && $0.status != .cancelled }.compactMap(\.taskBoardID))
+    for pick in picks where !existing.contains(pick.issue.id) {
+      try store.addTask(
+        title: pick.issue.title, notes: "", day: todayKey, startAt: pick.startAt, endAt: pick.endAt, source: .taskBoard,
+        taskBoardID: pick.issue.id, taskBoardProject: pick.issue.project.isEmpty ? nil : pick.issue.project)
+      added += 1
+    }
+    refresh()
+    return added
+  }
+
+  /// A preview with the Task Board links applied: while Task Board is the source, a line whose title equals one open issue
+  /// of the owner is linked to it. Other lines stay on this Mac. No issue is ever created.
+  func linked(_ preview: TBDFlowPlanPreview) -> TBDFlowPlanPreview {
+    guard taskBoard.isTaskBoard else { return preview }
+    var out = preview
+    out.drafts = TBDFlowTaskBoardLinker.link(preview.drafts, issues: taskBoard.issues)
+    return out
   }
 
   /// "Start focus": up to the focus length, never past the end of the timebox (a past timebox says why it cannot).

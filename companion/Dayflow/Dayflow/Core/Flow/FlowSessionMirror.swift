@@ -41,6 +41,9 @@ final class FlowSessionMirror: ObservableObject {
   private(set) var observer: FlowObserving
   /// The planner ticks goals off when the observer saw them finished (`FlowPlanner.start` sets this).
   var onGoalsCompleted: (([TBDFlowGoal]) -> Void)?
+  /// Which of the goals the observer finished were really checked off (asked after `onGoalsCompleted`); the "Checked off"
+  /// toast names only those. nil = all of them. A Task Board task is not checked off by the observer (F4).
+  var goalsToAnnounce: (([TBDFlowGoal]) -> [TBDFlowGoal])?
 
   private let defaults: UserDefaults
   private let settings: FlowAgentSettings
@@ -198,6 +201,8 @@ final class FlowSessionMirror: ObservableObject {
   func agentCompletedGoals(_ goals: [TBDFlowGoal]) {
     guard snapshot.phase == .active, !goals.isEmpty else { return }
     onGoalsCompleted?(goals)
+    let goals = goalsToAnnounce?(goals) ?? goals
+    guard !goals.isEmpty else { return }
     guard snapshot.alertStyle != .quiet else { return }
     if case .nudge = overlay { return }
     let title = goals[0].title

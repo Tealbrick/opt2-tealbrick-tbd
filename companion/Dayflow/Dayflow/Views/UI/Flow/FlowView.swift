@@ -93,7 +93,11 @@ struct FlowView: View {
       }
       Spacer(minLength: 0)
       HStack(spacing: TBDKit.s2) {
-        TBDTag("Only on this Mac", status: .idle)
+        if planner.taskBoard.isTaskBoard {
+          TBDTag("From Task Board", status: .live)
+        } else {
+          TBDTag("Only on this Mac", status: .idle)
+        }
         TBDTag(observer.status, status: observerTagStatus)
       }
     }

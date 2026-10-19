@@ -153,6 +153,7 @@ public final class TBDFlowStore: @unchecked Sendable {
             task.id = old.id
             task.createdAt = old.createdAt
             task.updatedAt = now
+            if task.status == .done || task.status == .cancelled { task.looksDoneAt = nil }
             if task.status == .done { task.completedAt = old.status == .done ? (old.completedAt ?? now) : now } else { task.completedAt = nil }
             try task.validate()
             state.tasks[index] = task
@@ -189,6 +190,37 @@ public final class TBDFlowStore: @unchecked Sendable {
         }
         if !found { throw TBDFlowError.notFound("Subtask") }
         return task
+    }
+
+    // MARK: Looks done (F4)
+
+    /// How long "Not yet" keeps the "Looks done" hint away from a task.
+    public static let looksDoneRetry: TimeInterval = 30 * 60
+
+    /// The observer thinks `id` is done. Sets the hint (nothing else changes: the person decides). Returns false and
+    /// changes nothing when the task is gone or closed, the hint is already there, or the person said "Not yet" less
+    /// than `looksDoneRetry` ago.
+    @discardableResult
+    public func markLooksDone(id: String, at when: Date? = nil) throws -> Bool {
+        try mutate { state, now in
+            guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { return false }
+            let task = state.tasks[i]
+            guard task.status != .done, task.status != .cancelled, task.looksDoneAt == nil else { return false }
+            let t = when ?? now
+            if let dismissed = task.looksDoneDismissedAt, t.timeIntervalSince(dismissed) < Self.looksDoneRetry { return false }
+            state.tasks[i].looksDoneAt = t
+            state.tasks[i].looksDoneDismissedAt = nil
+            return true
+        }
+    }
+
+    /// "Not yet": removes the hint and keeps it away for `looksDoneRetry`.
+    public func dismissLooksDone(id: String) throws {
+        try mutate { state, now in
+            guard let i = state.tasks.firstIndex(where: { $0.id == id }) else { throw TBDFlowError.notFound("Task") }
+            state.tasks[i].looksDoneAt = nil
+            state.tasks[i].looksDoneDismissedAt = now
+        }
     }
 
     public func task(id: String) -> TBDFlowTask? { locked { current.tasks.first { $0.id == id } } }
