@@ -30,8 +30,11 @@ if args[1] == "--sameness" {
     catch { FileHandle.standardError.write(Data("tbd-design-shots --sameness: \(error)\n".utf8)); exit(1) }
     exit(0)
 }
-let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
-let prefix = args.count >= 3 ? args[2] : "tbd"
+// Flow mockups (static, not app code): `tbd-design-shots --flow-mockups <outDir>` -> FlowMockups.swift, then exit.
+let flowMockups = args[1] == "--flow-mockups"
+if flowMockups && args.count < 3 { FileHandle.standardError.write(Data("usage: tbd-design-shots --flow-mockups <outDir>\n".utf8)); exit(2) }
+let outDir = URL(fileURLWithPath: flowMockups ? args[2] : args[1], isDirectory: true)
+let prefix = flowMockups ? "flow" : (args.count >= 3 ? args[2] : "tbd")
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
 let app = NSApplication.shared
@@ -369,6 +372,9 @@ struct SettingsProof: View {
 
 MainActor.assumeIsolated {
     do {
+        if flowMockups {
+            try runFlowMockups()
+        } else {
         let meetingID = try seedListen()
         let listen = TBDListeningRuntime.shared
         let page = CGSize(width: 1180, height: 820)
@@ -381,6 +387,7 @@ MainActor.assumeIsolated {
                 try render(listen.previewContent(tab: tab).background(TBDColor.paper), size: page, dark: dark, to: "\(prefix)-listen-\(tab)-\(theme)")
             }
             try render(listen.previewContent(tab: "library", transcriptID: meetingID).background(TBDColor.paper), size: page, dark: dark, to: "\(prefix)-listen-transcript-\(theme)")
+        }
         }
         let report = try JSONEncoder.pretty.encode(["screens": results.map { AnyEncodable($0) }, "failures": failures.map { AnyEncodable($0) }])
         try report.write(to: outDir.appendingPathComponent("\(prefix)-native-contrast.json"))
