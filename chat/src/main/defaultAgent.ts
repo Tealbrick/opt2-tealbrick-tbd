@@ -137,6 +137,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
   const turns = new Map<string, PendingTurn>();
 
   const send = (m: HelperToAgent) => child?.stdin.write(`${JSON.stringify(m)}\n`);
+  /** The person's model credential values of the running agent: scrubbed from every text that comes back. */
+  let secretValues: string[] = [];
+  const scrub = (text: string): string => secretValues.reduce((t, v) => (v.length >= 8 ? t.split(v).join("[redacted key]") : t), text);
 
   function failAll(message: string): void {
     for (const [id, t] of turns) { t.reject(new Error(message)); turns.delete(id); }
@@ -148,6 +151,8 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     const harness = harnessFor(route);
     const rest = await deps.config();
     const env = harness.processEnv(route, process.env);
+    // A provider error can quote the key; nothing the agent sends back may carry it into Chat or the helper log.
+    secretValues = Object.entries(env).filter(([name]) => MODEL_SECRET_NAMES.has(name)).map(([, value]) => value);
     const proc = (deps.spawnProcess ?? spawn)(deps.node, [deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     child = proc;
     proc.stderr.on("data", () => { /* agent logs stay local; never forwarded with content */ });
@@ -175,9 +180,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       const t = turns.get(m.id);
       if (!t) return;
       const e: AgentEvent = m.event;
-      if (e.kind === "delta") t.onDelta(e.text);
+      if (e.kind === "delta") t.onDelta(scrub(e.text));
       else if (e.kind === "reset") t.onReset?.();
-      else if (e.kind === "activity") t.onActivity(e.label);
+      else if (e.kind === "activity") t.onActivity(e.label === null ? null : scrub(e.label));
       else if (e.kind === "session") { t.sessionId = e.sessionId; t.onTurn?.({ sessionId: e.sessionId, turnId: m.id }); }
     } else if (m.type === "permission_request") {
       void deps.permission({ tool: m.tool, detail: m.detail, input: m.input ?? {} })
@@ -189,11 +194,11 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else send({ type: "answer", reqId: m.reqId, answers: null });
     } else if (m.type === "done") {
       const t = turns.get(m.id);
-      if (t) { turns.delete(m.id); t.resolve({ sessionId: m.sessionId, reply: m.reply }); }
+      if (t) { turns.delete(m.id); t.resolve({ sessionId: m.sessionId, reply: scrub(m.reply) }); }
     } else if (m.type === "error") {
       if (!m.id) return;
       const t = turns.get(m.id);
-      if (t) { turns.delete(m.id); t.reject(new Error(m.message)); }
+      if (t) { turns.delete(m.id); t.reject(new Error(scrub(m.message))); }
     }
   }
 
