@@ -147,6 +147,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Start daily recap generation scheduler (checks every 5 minutes)
     DailyRecapScheduler.shared.start()
 
+    // Flow: the creature overlay follows the session mirror, and the planner ticks the local list once a second.
+    // Not in the XCTest host: tests build their own planner on a temp folder.
+    if !TBDOnboardingController.isTestHost {
+      FlowOverlayController.shared.start()
+      FlowPlanner.shared.start()
+    }
+
 
     powerObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.willPowerOffNotification,

@@ -119,6 +119,11 @@ struct MainView: View {
           selectedIcon = .daily
         }
       }
+      .onReceive(NotificationCenter.default.publisher(for: .navigateToFlow)) { _ in
+        withAnimation(TBDMotion.spring) {
+          selectedIcon = .flow
+        }
+      }
   }
 
   @discardableResult

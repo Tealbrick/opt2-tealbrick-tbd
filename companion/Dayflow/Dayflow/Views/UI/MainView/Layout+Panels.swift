@@ -64,6 +64,8 @@ extension MainView {
           .padding(15)
       case .review:
         ReviewCardsView()
+      case .flow:
+        FlowView()
       case .daily:
         DailyView(selectedDate: $selectedDate)
       case .weekly:

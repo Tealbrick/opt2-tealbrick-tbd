@@ -99,6 +99,7 @@
       TBDFonts.register()
       NSApplication.shared.setActivationPolicy(.prohibited)
       let seeded = DemoSeed.seed()
+      let flow = FlowShotsSeed.planner()
       // Creates the Listening context on the demo root (no start: no capture, hotkeys, downloads), so Settings → Listen
       // pages render their real content.
       _ = TBDListeningRuntime.shared.previewSettings(section: "capture")
@@ -135,6 +136,16 @@
           try render(TBDOnboardingView(flow: flow), size: wide, dark: dark, name: "onboarding-\(name)-1600-\(theme)")
         }
         try render(StatusMenuView(dismissMenu: {}), size: CGSize(width: 320, height: 640), dark: dark, name: "menu-\(theme)")
+        // Flow (F2): the local Today page on a seeded store, the observer placeholder and the nudge preview.
+        for (tab, name) in [(FlowTab.today, "today"), (.observer, "observer"), (.nudge, "nudge")] {
+          try render(
+            FlowView(planner: flow, tab: tab, showsTasklistImport: true).background(TBDColor.tile), size: main, dark: dark,
+            name: "flow-\(name)-\(theme)")
+        }
+        // The debug card open (its Overlay tab), so its controls are in the contrast audit too.
+        try render(
+          ScrollView { FlowDemoView(showsDebugOpen: true).padding(TBDKit.s8) }.background(TBDColor.tile), size: CGSize(width: 1280, height: 1100),
+          dark: dark, name: "flow-nudge-debug-\(theme)")
       }
 
       let report = try JSONEncoder.shotsPretty.encode(ShotsReport(screens: results, failures: failures))
@@ -205,6 +216,41 @@
       window.contentView = nil
       retained.append(window)
       return rep
+    }
+  }
+
+  // MARK: - Flow demo data
+
+  /// A planner on a seeded store inside the shots root (deleted at the end): four tasks like the approved mockup, one
+  /// done, one "Now" with a running focus timer. The clock stands still at 10:18, so the page is the same on every run.
+  @MainActor
+  private enum FlowShotsSeed {
+    private final class Clock: @unchecked Sendable { var date: Date; init(_ d: Date) { date = d } }
+
+    static func planner() -> FlowPlanner {
+      let calendar = Calendar.current
+      let base = calendar.startOfDay(for: Date())
+      func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
+        calendar.date(bySettingHour: hour, minute: minute, second: second, of: base) ?? base
+      }
+      let clock = Clock(at(10, 12))
+      let url = TBDIdentity.applicationSupport("FlowShots").appendingPathComponent("flow.json")
+      let store = TBDFlowStore(url: url, clock: { clock.date })
+      let day = TBDFlowDay.string(from: base, calendar: calendar)
+      do {
+        let release = try store.addTask(title: "Release TBD dev.13", day: day, startAt: at(8, 30), endAt: at(9, 40))
+        try store.setStatus(id: release.id, .done)
+        let mockups = try store.addTask(title: "Flow mockups for Martin", day: day, startAt: at(9, 40), endAt: at(11, 30))
+        try store.addTask(title: "Reply to Eyal about the design review", day: day, startAt: at(11, 30), endAt: at(11, 45))
+        try store.addTask(title: "Weekly review", day: day, startAt: at(16, 0), endAt: at(16, 30))
+        try store.startFocus(taskID: mockups.id, mode: .focus, minutes: 25)
+      } catch {
+        print("tbd design shots: flow seed failed: \(error)")
+      }
+      clock.date = at(10, 18, 18)  // 18:42 left of the 25 minutes
+      let planner = FlowPlanner(store: store, now: { clock.date })
+      planner.load()
+      return planner
     }
   }
 

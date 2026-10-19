@@ -59,6 +59,8 @@ struct DayflowApp: App {
   @AppStorage("didOnboard") private var didOnboard = false
   @StateObject private var systemAppearance = SystemAppearanceObserver()
   @AppStorage(DayflowAppearance.storageKey) private var appearance: DayflowAppearance = .system
+  /// Mirrors FlowNudgeVariant.current so the menu title re-renders on toggle.
+  @AppStorage(FlowNudgeVariant.defaultsKey) private var flowNudgeVariant = FlowNudgeVariant.side.rawValue
   // Must be the shared instance: the Companion CLI write path (AgentWriteHandlers)
   // writes to CategoryStore.shared; a second copy would overwrite those edits.
   @StateObject private var categoryStore = CategoryStore.shared
@@ -113,6 +115,15 @@ struct DayflowApp: App {
         Button("Analyze captured activity now") {
           AnalysisManager.shared.analyzePendingActivity()
         }
+        Button("Flow: Simulate Distraction") {
+          FlowSessionMirror.shared.simulateDistraction()
+        }
+        .keyboardShortcut("D", modifiers: [.command, .shift])
+        Button("Flow: Nudge Style — \(FlowNudgeVariant(rawValue: flowNudgeVariant)?.title ?? FlowNudgeVariant.side.title)") {
+          let next = (FlowNudgeVariant(rawValue: flowNudgeVariant) ?? .side).next
+          FlowNudgeVariant.current = next
+          flowNudgeVariant = next.rawValue
+        }
       }
     }
   }
@@ -152,6 +163,7 @@ extension Notification.Name {
   static let navigateToDaily = Notification.Name("navigateToDaily")
   static let navigateToSupport = Notification.Name("navigateToSupport")
   static let navigateToWeekly = Notification.Name("navigateToWeekly")
+  static let navigateToFlow = Notification.Name("navigateToFlow")
   static let timelineDataUpdated = Notification.Name("timelineDataUpdated")
   static let showTimelineFailureToast = Notification.Name("showTimelineFailureToast")
   static let showScreenRecordingPermissionNotice = Notification.Name(
