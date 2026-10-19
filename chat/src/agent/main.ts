@@ -75,6 +75,12 @@ function options(c: AgentConfig, id: string, abort: AbortController, sessionId?:
       ...base.env,
       // The harness's own state, isolated from the person's Claude setup.
       CLAUDE_CONFIG_DIR: join(c.stateDir, "claude"),
+      // S2 (dev.11): the agent's own shell must never read the person's model key. code.claude.com/docs/en/env-vars
+      // ("What the subprocess environment scrub removes"): strips credentials from the environments of Bash commands,
+      // hooks and stdio MCP servers; Claude Code keeps them for its own API calls. Proven by
+      // test/agent-shell-env.test.ts. (The sandbox's `credentials.envVars` deny alone did not keep the key out in TBD's
+      // agent path in that test, cause not explained — a direct SDK call honoured it; the scrub alone is proven here.)
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
       ...modelEnv(c.model, process.env),
     },
     canUseTool: async (tool, input, { signal }): Promise<PermissionResult> => {
