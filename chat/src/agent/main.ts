@@ -75,7 +75,7 @@ function options(c: AgentConfig, id: string, abort: AbortController, sessionId?:
       ...base.env,
       // The harness's own state, isolated from the person's Claude setup.
       CLAUDE_CONFIG_DIR: join(c.stateDir, "claude"),
-      ...modelEnv(c.model),
+      ...modelEnv(c.model, process.env),
     },
     canUseTool: async (tool, input, { signal }): Promise<PermissionResult> => {
       if (tool === ASK_TOOL) return ask(id, input, signal);

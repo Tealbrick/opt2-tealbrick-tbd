@@ -10,7 +10,7 @@ import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePol
 import { currentControlPlane } from "./controlPlanes";
 import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
-import { createDefaultAgent, type DefaultAgent } from "./defaultAgent";
+import { createDefaultAgent, type AgentRoute, type DefaultAgent } from "./defaultAgent";
 import { askPerson } from "./asks";
 import { startSignerSocket } from "./signerSocket";
 import { relayLaunch, type RelayLaunch } from "./relayLaunch";
@@ -219,7 +219,7 @@ export function getServices(): Services {
   const agent = createDefaultAgent({
     node: process.execPath,
     entry: join(resources, "agent.mjs"),
-    model: async () => (await nativeCall("agentModel")) as { model: string; baseUrl?: string; apiKey: string },
+    model: async () => (await nativeCall("agentModel")) as AgentRoute,
     config: async () => {
       const c = agentIdentity.connection();
       const relay = c ? await agentRelay(c) : undefined;

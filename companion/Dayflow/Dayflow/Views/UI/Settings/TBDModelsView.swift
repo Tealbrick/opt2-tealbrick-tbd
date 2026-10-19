@@ -43,7 +43,12 @@ struct TBDModelsView: View {
             else {
               Text("Set up a connection once, then choose it for each task below. Choosing a model does not turn on cleanup. TBD never moves a task to another provider by itself.")
                 .font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
-              TBDAgentModelForm { reload() }
+              // WP-HARNESS step 1: when TBD's agent uses the person's cloud provider, say so; saving the form below
+              // makes the form's model TBD's agent's route again.
+              if let cloud = TBDAgentCloudStore().isActive ? TBDAgentCloudStore().load() : nil {
+                TBDNotice("TBD's agent uses \(cloud.model) on \(cloud.provider.title). To change it, open Settings › Account › Review setup. Saving a model below switches TBD's agent back to it.")
+              }
+              TBDAgentModelForm { TBDAgentCloudStore().deactivate(); reload() }
               route("Cleanup", task: "cleanup", detail: "Optional transcript correction; shared model, independent switches.")
               Toggle("Clean up Chat voice input", isOn: $chatCleanup).toggleStyle(TBDSwitchStyle()).frame(maxWidth: 420)
               Toggle("Clean up voice notes", isOn: $noteCleanup).toggleStyle(TBDSwitchStyle()).frame(maxWidth: 420)

@@ -31,6 +31,11 @@ final class TBDOnboardingController: ObservableObject {
   @Published private(set) var pairCode = ""
   @Published private(set) var pairing = false
   @Published private(set) var pairError = ""
+  /// Step 2, cloud (WP-HARNESS step 1, C287 (1)): the person's own Bedrock / Vertex AI / Foundry setting.
+  let cloudStore = TBDAgentCloudStore()
+  @Published var cloud = TBDAgentCloud(provider: .bedrock, model: TBDAgentCloudProvider.bedrock.exampleModel, region: "us-east-1")
+  @Published var cloudKey = ""
+  @Published private(set) var cloudMessage: String?
   /// Ollama on this Mac: status for the agent's model (after a test) and for the Companion's recommended model.
   @Published private(set) var agentLocalStatus: TBDAgentModelSetup.LocalStatus?
   @Published private(set) var companionLocalStatus: TBDAgentModelSetup.LocalStatus?
@@ -73,6 +78,8 @@ final class TBDOnboardingController: ObservableObject {
       agentRuntime = local ? .local : .apiKey
       agentModel = route.model
     }
+    if let saved = cloudStore.load() { cloud = saved }
+    if cloudStore.isActive { agentRuntime = .cloud }
     if let runtime = machine.record.choices.agentRuntime, runtime != .subscription { agentRuntime = runtime }
     if preview { return }
     linkObserver = NotificationCenter.default.addObserver(forName: .tbdOpenOnboarding, object: nil, queue: .main) { note in
@@ -113,6 +120,7 @@ final class TBDOnboardingController: ObservableObject {
     poll?.cancel()
     poll = nil
     agentKey = ""
+    cloudKey = ""
   }
 
   /// The Yes/No shown on the Workspace and Agent steps: the recorded answer, else what is already set up (a legacy
@@ -138,13 +146,16 @@ final class TBDOnboardingController: ObservableObject {
     // resolve() reads the key from the Keychain: only on the steps that show it, else keep the last answer.
     if agentCheckDue && (step == .agent || step == .summary) {
       agentCheckDue = false
-      if (try? TBDAgentModelSetup.resolve(registry)) != nil {
+      // The route TBD's agent really starts with: the registry route or the person's cloud setting.
+      if let route = try? TBDAgentModelSetup.resolveRoute(registry, cloud: cloudStore) {
         c.agentModelReady = true
-        c.agentModelName = TBDAgentModelSetup.current(registry).model
+        c.agentModelName = route.model
+        c.agentCloud = cloudStore.isActive ? route.source : nil
       }
     } else {
       c.agentModelReady = checks.agentModelReady
       c.agentModelName = checks.agentModelName
+      c.agentCloud = checks.agentCloud
     }
     if account.signedIn, step == .agent || step == .summary || checks.agentPaired {
       let state = try? await TBDChatRuntime.shared.accountCall("agentConnection") as? [String: Any]
@@ -286,6 +297,8 @@ final class TBDOnboardingController: ObservableObject {
           // A key typed under "API key" never goes to the local connection (review dev.9 #7).
           try TBDAgentModelSetup.save(provider: provider, endpoint: provider.fixedEndpoint ?? "", apiKey: provider == .ollama ? "" : key,
                                       model: model, registry: registry)
+          // The tested route is now TBD's agent's route; a cloud setting stays saved for later.
+          cloudStore.deactivate()
           agentKey = ""
         } catch { agentTest = error.localizedDescription; agentTesting = false; return }
       }
@@ -368,6 +381,34 @@ final class TBDOnboardingController: ObservableObject {
     relaunching = false
   }
 
+  // MARK: Cloud provider (WP-HARNESS step 1)
+
+  /// Saves the cloud setting and makes it TBD's agent's route. There is no cheap test call for every provider (Bedrock
+  /// signs requests with AWS); the first chat message checks it and shows the provider's own error.
+  func saveCloud() {
+    let typed = cloudKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hasKey = !typed.isEmpty || (cloud.secretName != nil && cloudStore.hasKey(cloud.provider))
+    if let missing = cloud.missing(hasKey: hasKey) { cloudMessage = missing; return }
+    do {
+      try cloudStore.save(cloud, key: typed)
+      cloudKey = ""
+      cloudMessage = nil
+      machine.update { $0.agent = .yes; $0.agentRuntime = .cloud }
+      agentCheckDue = true
+      Task { await refreshChecks() }
+    } catch {
+      cloudMessage = error.localizedDescription
+    }
+  }
+
+  func chooseCloud(_ provider: TBDAgentCloudProvider) {
+    guard provider != cloud.provider else { return }
+    cloud = cloudStore.load().flatMap { $0.provider == provider ? $0 : nil }
+      ?? TBDAgentCloud(provider: provider, model: provider.exampleModel, region: provider == .vertex ? "us-east5" : provider == .bedrock ? "us-east-1" : "")
+    cloudKey = ""
+    cloudMessage = nil
+  }
+
   // MARK: Downloads into Ollama (dev.10)
 
   /// TBD's agent model is missing in Ollama: download it, then test and save.
@@ -418,6 +459,7 @@ struct TBDOnboardingView: View {
 
   var body: some View {
     GeometryReader { geo in
+      let cardWidth = min(860, geo.size.width - 2 * TBDKit.s10)
       VStack(alignment: .leading, spacing: TBDKit.s5) {
         HStack(alignment: .top) {
           VStack(alignment: .leading, spacing: TBDKit.s1) {
@@ -431,9 +473,11 @@ struct TBDOnboardingView: View {
             Button("Back to TBD") { flow.closeEdit() }.buttonStyle(TBDButtonStyle(.quiet))
           }
         }
+        // The header is as wide as the card, so the column stays centred in the window.
+        .frame(width: cardWidth)
         TBDStepFlow(steps: steps,
                     current: Binding(get: { flow.step.index }, set: { flow.move(to: $0) }),
-                    size: CGSize(width: min(860, geo.size.width - 2 * TBDKit.s10), height: max(420, min(640, geo.size.height - 150)))) {
+                    size: CGSize(width: cardWidth, height: max(420, min(640, geo.size.height - 150)))) {
           flow.finish()
         }
         .overlay(TBDBrickShape().strokeBorder(TBDColor.line, lineWidth: TBDKit.hair))
@@ -601,8 +645,9 @@ struct TBDOnboardingView: View {
             flow.agentRuntime = .local
             if flow.agentModel == TBDAgentModelSetup.defaultModel { flow.agentModel = TBDAgentModelSetup.defaultLocalModel }
           }
+          segment("Cloud (Bedrock, Vertex, Foundry)", selected: flow.agentRuntime == .cloud) { flow.agentRuntime = .cloud }
         }
-        panel { agentModelPanel }
+        if flow.agentRuntime == .cloud { panel { cloudPanel } } else { panel { agentModelPanel } }
         if account.signedIn { panel { pairingPanel } }
       }
     }
@@ -645,6 +690,62 @@ struct TBDOnboardingView: View {
       if flow.agentRuntime == .local, let error = downloads.errors[agentModelName] {
         Text(error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
       }
+    }
+  }
+
+  /// WP-HARNESS step 1: TBD's agent on the person's own cloud provider (C287 (1)).
+  private var cloudPanel: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s3) {
+      HStack(spacing: TBDKit.s2) {
+        ForEach(TBDAgentCloudProvider.allCases, id: \.self) { provider in
+          segment(provider.title, selected: flow.cloud.provider == provider) { flow.chooseCloud(provider) }
+        }
+      }
+      Text(cloudHint).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+      cloudField("Model ID", $flow.cloud.model, mono: true)
+      switch flow.cloud.provider {
+      case .bedrock:
+        cloudField("AWS region", $flow.cloud.region)
+        cloudField("AWS profile (optional)", $flow.cloud.awsProfile)
+        cloudSecret("Bedrock API key (optional)")
+      case .vertex:
+        cloudField("Project ID", $flow.cloud.project)
+        cloudField("Region", $flow.cloud.region)
+      case .foundry:
+        cloudField("Resource name", $flow.cloud.resource)
+        cloudSecret("Foundry API key")
+      }
+      HStack(spacing: TBDKit.s3) {
+        Button("Save") { flow.saveCloud() }.buttonStyle(TBDButtonStyle(.secondary))
+        if let message = flow.cloudMessage {
+          Text(message).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink)
+        } else if flow.checks.agentCloud != nil && flow.checks.agentModelReady {
+          TBDTag("Saved: \(flow.checks.agentCloud ?? "")", status: .live)
+          Text("Your first chat message checks the connection.").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+        }
+      }
+    }
+  }
+
+  private var cloudHint: String {
+    switch flow.cloud.provider {
+    case .bedrock: "Uses your AWS sign-in on this Mac (aws configure or AWS SSO), or a Bedrock API key if you type one."
+    case .vertex: "Uses your Google sign-in on this Mac. In Terminal, run: gcloud auth application-default login"
+    case .foundry: "Your Microsoft Foundry resource and its API key."
+    }
+  }
+
+  private func cloudField(_ label: String, _ text: Binding<String>, mono: Bool = false) -> some View {
+    HStack(spacing: TBDKit.s3) {
+      Text(label).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted).frame(width: 170, alignment: .leading)
+      TextField(label, text: text).textFieldStyle(.roundedBorder).font(mono ? TBDTokens.Typography.mono : TBDTokens.Typography.body)
+    }
+  }
+
+  private func cloudSecret(_ label: String) -> some View {
+    HStack(spacing: TBDKit.s3) {
+      Text(label).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted).frame(width: 170, alignment: .leading)
+      SecureField(flow.cloud.secretName.map { _ in "Saved keys stay in the Keychain" } ?? "", text: $flow.cloudKey).textFieldStyle(.roundedBorder)
     }
   }
 
