@@ -470,60 +470,69 @@ final class TBDOnboardingController: ObservableObject {
     Task { await refreshChecks() }
   }
 
-  /// Saves the LangChain agent's model setting, switches TBD's agent to LangChain and runs the 4 checks through the
-  /// helper (restart + one self-test round trip). Anything but a full pass switches back to TBD's agent with the reason.
+  /// The 4 checks of a PENDING LangChain choice (review dev.13 #2): the setting changes only when all pass. The helper
+  /// runs the self-test on a temporary agent with the LangChain route; the person's running agent is not touched.
   func useLangChain() {
     guard !harnessBusy, !Self.isTestHost, !isPreview else { return }
     harnessBusy = true
     harnessMessage = nil
     var checks = Self.emptyChecks
-    func done(_ message: String?) {
+    func finish(_ message: String?) {
       langchainChecks = checks
       harnessMessage = message
       harnessBusy = false
       agentCheckDue = true
       Task { await refreshChecks() }
     }
-    func revert(_ message: String) {
-      harnessStore.kind = .claudeAgentSDK
-      harnessKind = .claudeAgentSDK
-      restartAgent()
-      done("\(message) TBD's agent stays on.")
-    }
+    func fail(_ message: String) { finish("\(message) \(harnessKind == .langchain ? "The LangChain agent stays on." : "TBD's agent stays on.")") }
     // 1. Installed: the bundled LangChain agent is in this app.
     let bundle = Bundle.main.resourceURL?.appendingPathComponent("Chat/agent-langchain.mjs")
     checks[0] = ("Installed", bundle.map { FileManager.default.fileExists(atPath: $0.path) } ?? false, "")
-    guard checks[0].ok == true else { revert("The LangChain agent is not in this build of TBD."); return }
-    // 2. Model: the setting resolves for the LangChain harness.
+    guard checks[0].ok == true else { fail("The LangChain agent is not in this build of TBD."); return }
+    // 2. Model: the LangChain agent's own settings (they do not change TBD's agent) resolve for it.
     harnessStore.provider = langchainProvider
     if langchainProvider == .openai {
       harnessStore.openAIModel = openAIModel
-      do { try harnessStore.saveOpenAIKey(openAIKey); openAIKey = ""; refreshOpenAIKey() } catch { revert(error.localizedDescription); return }
+      do { try harnessStore.saveOpenAIKey(openAIKey); openAIKey = ""; refreshOpenAIKey() } catch { fail(error.localizedDescription); return }
     }
-    harnessStore.kind = .langchain
     do {
-      let route = try TBDAgentModelSetup.resolveRoute(registry, cloud: cloudStore, harness: harnessStore)
+      let route = try TBDAgentModelSetup.resolveRoute(registry, cloud: cloudStore, harness: harnessStore, as: .langchain)
       checks[1] = ("Model", true, "\(route.model) · \(route.source)")
     } catch {
       checks[1] = ("Model", false, error.localizedDescription)
-      revert(error.localizedDescription); return
+      fail(error.localizedDescription); return
     }
-    // 3 + 4. One round trip and TBD's tools, through the helper (restart with the new harness, then the self-test).
+    // 3 + 4. One round trip and a read-only probe of each of TBD's tool families, on a temporary LangChain agent.
     Task {
-      let answer = (try? await TBDChatRuntime.shared.accountCall("agentSelfTest")) as? [String: Any] ?? [:]
+      let answer = (try? await TBDChatRuntime.shared.accountCall("agentSelfTest", args: [TBDAgentHarnessKind.langchain.rawValue])) as? [String: Any] ?? [:]
       let ok = answer["ok"] as? Bool ?? false
       checks[2] = ("Answers", ok, ok ? "One reply in this check" : (answer["error"] as? String ?? "No answer from the LangChain agent."))
-      let families = (answer["tools"] as? [String] ?? []).filter { $0 != "ask_person" }
-      let names = families.map { ["companion": "timeline", "listening": "transcripts", "tealbrick": "workspace apps"][$0] ?? $0 }
-      checks[3] = ("TBD's tools", ok && !families.isEmpty, names.isEmpty ? "No TBD tool answered." : names.joined(separator: ", "))
-      guard checks[2].ok == true, checks[3].ok == true else {
-        revert(checks[2].ok == true ? "The LangChain agent could not reach TBD's tools." : "The LangChain agent did not answer: \(checks[2].detail)")
-        return
-      }
+      let tools = answer["tools"] as? [String: Any] ?? [:]
+      let configured = (tools["configured"] as? [String] ?? []).filter { $0 != "ask_person" }
+      let loaded = Set(tools["loaded"] as? [String] ?? [])
+      let probes = tools["probes"] as? [String: Any] ?? [:]
+      let failed = configured.filter { !loaded.contains($0) || (probes[$0].map { !($0 is NSNull) } ?? true) }
+      let label = { (f: String) in ["companion": "timeline", "listening": "transcripts", "tealbrick": "workspace apps"][f] ?? f }
+      let toolsOK = ok && !configured.isEmpty && failed.isEmpty
+      checks[3] = ("TBD's tools", toolsOK, toolsOK ? configured.map(label).joined(separator: ", ")
+        : failed.isEmpty ? "No TBD tool answered." : "Not answering: \(failed.map(label).joined(separator: ", "))")
+      guard checks[2].ok == true else { fail("The LangChain agent did not answer: \(checks[2].detail)"); return }
+      guard toolsOK else { fail("The LangChain agent could not reach TBD's tools."); return }
+      // All 4 passed: only now TBD's agent becomes the LangChain agent.
+      harnessStore.kind = .langchain
       harnessKind = .langchain
       machine.update { $0.agent = .yes }
-      done(nil)
+      restartAgent()
+      finish(nil)
     }
+  }
+
+  /// Removes the stored OpenAI key (review dev.13 #15). The LangChain agent on OpenAI then needs a new key.
+  func removeOpenAIKey() {
+    do { try harnessStore.removeOpenAIKey(); harnessMessage = nil } catch { harnessMessage = error.localizedDescription }
+    refreshOpenAIKey()
+    agentCheckDue = true
+    Task { await refreshChecks() }
   }
 
   // MARK: Cloud provider (WP-HARNESS step 1)
@@ -542,6 +551,8 @@ final class TBDOnboardingController: ObservableObject {
       try cloudStore.save(cloud, key: typed)
       cloudKey = ""
       cloudEdited = false
+      // Cloud providers work with TBD's agent (Claude Agent SDK) only: saving one switches back to it.
+      if harnessStore.kind == .langchain { harnessStore.kind = .claudeAgentSDK; harnessKind = .claudeAgentSDK; harnessShown = .claudeAgentSDK }
       cloudMessage = nil
       refreshCloudKey()
       machine.update { $0.agent = .yes; $0.agentRuntime = .cloud }
@@ -891,6 +902,7 @@ struct TBDOnboardingView: View {
         HStack(spacing: TBDKit.s3) {
           Text("OpenAI API key").font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted).frame(width: 170, alignment: .leading)
           SecureField(flow.openAIKeyStored ? "A key is saved. Type a new key to replace it." : "sk-…", text: $flow.openAIKey).textFieldStyle(.roundedBorder)
+          if flow.openAIKeyStored { Button("Remove key") { flow.removeOpenAIKey() }.buttonStyle(TBDButtonStyle(.quiet)) }
         }
         .onAppear { flow.refreshOpenAIKey() }
       } else {

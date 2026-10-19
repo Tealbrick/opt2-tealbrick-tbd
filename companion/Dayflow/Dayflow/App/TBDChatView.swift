@@ -337,8 +337,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
 
   /// TBD's agent route: the "agent" model route (an Anthropic connection with a key) or the person's cloud provider
   /// (WP-HARNESS step 1, C287 (1)). The error text is what Chat shows on the TBD row and in the composer.
-  static func agentModel() throws -> TBDAgentRoute {
-    try TBDAgentModelSetup.resolveRoute(TBDModelRegistry())
+  static func agentModel(as kind: TBDAgentHarnessKind? = nil) throws -> TBDAgentRoute {
+    try TBDAgentModelSetup.resolveRoute(TBDModelRegistry(), as: kind)
   }
 
   private func native(_ method: String, args: [Any]) async throws -> Any {
@@ -381,8 +381,10 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     case "agentModelName": return (try? Self.agentModel())?.model ?? NSNull()
     // The helper's harness adapter builds the agent's environment from `env` (plain) and `secretEnv` (the person's
     // own key, by variable name); `apiKey`/`baseUrl` keep the earlier shape for the Anthropic route.
+    // An optional harness id resolves the route as if that harness were chosen (the setup's self-test of a pending
+    // choice, WP-HARNESS L3); the setting itself is unchanged.
     case "agentModel":
-      let route = try Self.agentModel()
+      let route = try Self.agentModel(as: TBDAgentHarnessKind(rawValue: text))
       var answer: [String: Any] = ["harness": route.harness, "model": route.model, "env": route.environment,
                                    "secretEnv": route.secrets, "source": route.source,
                                    "apiKey": route.secrets["ANTHROPIC_API_KEY"] ?? ""]

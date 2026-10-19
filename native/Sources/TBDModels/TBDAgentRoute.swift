@@ -163,9 +163,10 @@ public extension TBDAgentModelSetup {
     /// TBD's agent's route: the cloud setting when it is active and complete, else the registry's "agent" route
     /// (which throws the "No model set" sentences). Daily's own use of the agent route stays `resolve(_:)`
     /// (Anthropic only), because Daily calls the model itself.
+    /// `as`: resolve as if this harness were chosen (the setup's checks of a pending choice; the setting is unchanged).
     static func resolveRoute(_ registry: TBDModelRegistry, cloud: TBDAgentCloudStore = TBDAgentCloudStore(),
-                             harness: TBDAgentHarnessStore = TBDAgentHarnessStore()) throws -> TBDAgentRoute {
-        if harness.kind == .langchain {
+                             harness: TBDAgentHarnessStore = TBDAgentHarnessStore(), as kind: TBDAgentHarnessKind? = nil) throws -> TBDAgentRoute {
+        if (kind ?? harness.kind) == .langchain {
             // WP-HARNESS L3: the LangChain agent (person's own Anthropic/OpenAI key, or Ollama on this Mac).
             if cloud.isActive { throw TBDAgentModelError.cloudNotForLangChain }
             if harness.provider == .openai {

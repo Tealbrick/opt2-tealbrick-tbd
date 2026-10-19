@@ -131,6 +131,14 @@ final class TBDAgentRouteTests: XCTestCase {
         XCTAssertFalse(harness.hasOpenAIKey)
     }
 
+    func testAPendingChoiceResolvesWithoutChangingTheSetting() throws {
+        let (registry, cloud, harness) = fixture3()
+        try TBDAgentModelSetup.save(provider: .ollama, endpoint: "", apiKey: "", model: "gpt-oss:20b", registry: registry)
+        XCTAssertEqual(try TBDAgentModelSetup.resolveRoute(registry, cloud: cloud, harness: harness, as: .langchain).harness, "langchain")
+        XCTAssertEqual(harness.kind, .claudeAgentSDK, "checking a pending choice never switches")
+        XCTAssertEqual(try TBDAgentModelSetup.resolveRoute(registry, cloud: cloud, harness: harness).harness, "claude-agent-sdk")
+    }
+
     func testLangChainRefusesACloudRouteAndTheSDKIsTheDefault() throws {
         let (registry, cloud, harness) = fixture3()
         XCTAssertEqual(harness.kind, .claudeAgentSDK)
