@@ -47,7 +47,9 @@ final class OpenAICompatibleProviderTests: XCTestCase {
       requests += 1
       XCTAssertEqual(operation, "transcribe_screenshots")
       let content = request.messages[1].content
-      XCTAssertEqual(content.filter { $0.type == "image_url" }.count, 15)
+      // The provider sends at most 10 frames so the image payload stays under ~700 KB (1 MiB gateway cap;
+      // OpenAICompatibleProvider.transcribeScreenshots). First and last frame are always included.
+      XCTAssertEqual(content.filter { $0.type == "image_url" }.count, 10)
       XCTAssertTrue(content.contains { $0.text == "Screenshot at 00:15:00:" })
       XCTAssertFalse(content[0].text!.contains("1 min apart"))
       return
@@ -73,7 +75,8 @@ final class OpenAICompatibleProviderTests: XCTestCase {
     let provider = OpenAICompatibleProvider(configuration: configuration()) { request, _, _ in
       requests += 1
       let prompt = request.messages[1].content[0].text!
-      XCTAssertTrue(prompt.contains("Previous cards:"))
+      // This provider uses the ChatGPT timeline prompt (CodexProvider+Prompts.swift): previous cards in a tagged block.
+      XCTAssertTrue(prompt.contains("<previous_cards>"))
       XCTAssertTrue(prompt.contains("Release notes"))
       if requests == 1 { return "[]" }
       XCTAssertTrue(prompt.contains("PREVIOUS ATTEMPT FAILED"))
