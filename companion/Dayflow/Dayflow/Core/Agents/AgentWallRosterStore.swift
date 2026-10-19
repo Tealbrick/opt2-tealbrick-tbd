@@ -34,6 +34,9 @@ struct AgentWallAccountKey: Equatable {
   var profile = ""
   var issuer = ""
   var email = ""
+
+  /// The slot book's workspace scope: issuer + workspace (empty while signed out).
+  var slotScope: String { signedIn && !workspace.isEmpty ? "\(issuer)|\(workspace)" : "" }
 }
 
 extension TBDAccountCoordinator {
@@ -97,9 +100,9 @@ final class AgentWallRosterStore: ObservableObject {
     self.isAppActive = isAppActive ?? { NSApplication.shared.isActive }
     self.slotDefaults = slotDefaults
     self.now = now ?? { Date() }
-    slotBook = AgentWallSlotBook(defaults: slotDefaults)
-    slotOrder = slotBook.order
     let key = accountNow()
+    slotBook = AgentWallSlotBook(defaults: slotDefaults, scope: key.slotScope)
+    slotOrder = slotBook.order
     answerKey = key
     state = Self.ownOnlyState(for: key)
   }
@@ -205,6 +208,11 @@ final class AgentWallRosterStore: ObservableObject {
     guard key != answerKey else { return false }
     answerKey = key
     state = Self.ownOnlyState(for: key)
+    if slotBook.scope != key.slotScope {
+      // Another workspace: its own slot order, so the old workspace's agents leave no gaps.
+      slotBook = AgentWallSlotBook(defaults: slotDefaults, scope: key.slotScope)
+      slotOrder = slotBook.order
+    }
     return true
   }
 

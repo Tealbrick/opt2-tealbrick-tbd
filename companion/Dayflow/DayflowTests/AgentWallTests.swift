@@ -162,6 +162,24 @@ final class AgentWallTests: XCTestCase {
     XCTAssertEqual(AgentWallPlan(agents: roster(["Atlas", "Henry", "Nova"]), showOffline: true).bricks.map(\.agentID), ["tbd-default", "atlas", "henry", "nova"])
   }
 
+  func testEachWorkspaceKeepsItsOwnSlotOrder() {
+    let suite = "tbd.test.wallslots.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let t0 = Date(timeIntervalSince1970: 2_000_000)
+    var first = AgentWallSlotBook(defaults: defaults, scope: "https://portal|ws_a")
+    first.update(with: roster(["Zed", "Aaa"]), now: t0)
+    first.save(to: defaults)
+    var second = AgentWallSlotBook(defaults: defaults, scope: "https://portal|ws_b")
+    XCTAssertEqual(second.order, [], "another workspace starts empty: no gaps from the first one")
+    second.update(with: roster(["Beta"]), now: t0)
+    second.save(to: defaults)
+    XCTAssertEqual(AgentWallSlotBook(defaults: defaults, scope: "https://portal|ws_a").order, ["tbd-default", "aaa", "zed"])
+    XCTAssertEqual(AgentWallSlotBook(defaults: defaults, scope: "https://portal|ws_b").order, ["tbd-default", "beta"])
+    XCTAssertEqual(AgentWallAccountKey(signedIn: true, workspace: "ws_a", issuer: "https://portal").slotScope, "https://portal|ws_a")
+    XCTAssertEqual(AgentWallAccountKey(signedIn: false, workspace: "ws_a", issuer: "https://portal").slotScope, "")
+  }
+
   func testSlotBookKeepsTheOrderPersistsItAndPrunesAfter30Days() {
     let suite = "tbd.test.wallslots.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!

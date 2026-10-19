@@ -314,8 +314,9 @@ struct AgentWallPlan: Equatable {
 
 // MARK: - Slot book (first-seen order, kept on this Mac)
 
-/// The first-seen order of the agents, so a brick never moves when another agent comes or goes. Stored in UserDefaults:
-/// `agentWallSlotOrder` = [agentID] (TBD's own id first), `agentWallSlotSeen` = [agentID: last seen, seconds since 1970].
+/// The first-seen order of the agents, so a brick never moves when another agent comes or goes. Stored in UserDefaults
+/// per workspace (`scope` = issuer + workspace; empty = signed out): `agentWallSlotOrder.<scope>` = [agentID] (TBD's own
+/// id first), `agentWallSlotSeen.<scope>` = [agentID: last seen, seconds since 1970]. Another workspace never leaves gaps.
 /// A new agent goes to the end (several new ones in name order). An agent that leaves keeps its slot for 30 days, then
 /// the slot is pruned.
 struct AgentWallSlotBook: Equatable {
@@ -328,14 +329,21 @@ struct AgentWallSlotBook: Equatable {
 
   init() {}
 
-  init(defaults: UserDefaults) {
-    order = (defaults.array(forKey: Self.orderKey) as? [String]) ?? []
-    lastSeen = (defaults.dictionary(forKey: Self.seenKey) as? [String: Double]) ?? [:]
+  /// The workspace the book belongs to.
+  private(set) var scope = ""
+
+  static func orderKey(_ scope: String) -> String { scope.isEmpty ? orderKey : "\(orderKey).\(scope)" }
+  static func seenKey(_ scope: String) -> String { scope.isEmpty ? seenKey : "\(seenKey).\(scope)" }
+
+  init(defaults: UserDefaults, scope: String = "") {
+    self.scope = scope
+    order = (defaults.array(forKey: Self.orderKey(scope)) as? [String]) ?? []
+    lastSeen = (defaults.dictionary(forKey: Self.seenKey(scope)) as? [String: Double]) ?? [:]
   }
 
   func save(to defaults: UserDefaults) {
-    defaults.set(order, forKey: Self.orderKey)
-    defaults.set(lastSeen, forKey: Self.seenKey)
+    defaults.set(order, forKey: Self.orderKey(scope))
+    defaults.set(lastSeen, forKey: Self.seenKey(scope))
   }
 
   /// Merge one roster answer. Call it only with a real answer (not with the failure or the signed-out state).
