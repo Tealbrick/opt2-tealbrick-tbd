@@ -440,3 +440,17 @@ public struct TBDStepFlow: View {
         }
     }
 }
+
+/// A function that needs an app the workspace has not paid for, or not installed (C282): lock mark + the sentence
+/// ("Available with Rules & Approvals."). Muted hint text; it replaces the control, never sits beside a live one.
+public struct TBDAvailableWith: View {
+    let text: String
+    public init(_ text: String) { self.text = text }
+    public var body: some View {
+        HStack(spacing: TBDKit.s2) {
+            Image(systemName: "lock").font(TBDFonts.symbol(TBDKit.textHint)).foregroundStyle(TBDColor.muted).accessibilityHidden(true)
+            Text(text).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
