@@ -19,7 +19,7 @@ struct SettingsOtherTabView: View {
 
   private var appPreferencesSection: some View {
     SettingsSection(
-      title: String(localized: "App preferences"),
+      title: "",   // the pane header "General" names it
       isFirst: true
     ) {
       VStack(alignment: .leading, spacing: 0) {

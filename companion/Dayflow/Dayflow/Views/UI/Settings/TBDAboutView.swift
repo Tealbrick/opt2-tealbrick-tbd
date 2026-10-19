@@ -6,7 +6,7 @@ struct TBDAboutView: View {
   @AppStorage(TBDProductLinks.supportKey) private var support = ""
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsStyle.sectionSpacing) {
-      SettingsSection(title: String(localized: "TBD"), isFirst: true) {
+      SettingsSection(title: "", isFirst: true) {   // the pane header "About" names it
         VStack(alignment: .leading, spacing: TBDKit.s4) {
           Text("Chat · Companion · Listen")
             .font(TBDTokens.Typography.body)

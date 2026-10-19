@@ -34,10 +34,10 @@ public enum TBDSettingsRoute {
             case .permissions: return "The macOS permissions TBD needs."
             case .other: return "Language, appearance and how TBD starts."
             case .about: return "Version, updates and licences."
-            case .privacy: return "Apps that TBD hides from screen capture."
+            case .privacy: return "Choose apps TBD should hide from screenshots."
             case .storage: return "Space used by screen recordings and timelapses."
             case .aiTools: return "The Companion command and its edit access for agents."
-            case .data: return "Export your Companion timeline."
+            case .data: return "Move your Companion timeline into tools you already use."
             case .capture: return "Microphone, dictation, transcription and meeting capture."
             case .audioSystem: return "Dictation history, retention and Listen storage."
             }
