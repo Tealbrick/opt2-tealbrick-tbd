@@ -81,14 +81,17 @@ struct TBDPermissionsView: View {
   @ObservedObject private var permissions = TBDPermissions.shared
   @ObservedObject private var appState = AppState.shared
 
-  /// TBD-DEV7-1: permission granted but capture off (the state dev.7's setup left behind) must be visible and fixable here.
+  @ObservedObject private var pauseManager = PauseManager.shared
+
+  /// TBD-DEV7-1: permission granted but capture off (the state dev.7's setup left behind) must be visible and fixable
+  /// here. Not during a pause the person chose (the menu bar shows and ends that).
   @ViewBuilder private var captureRow: some View {
-    if permissions.screen == "Allowed" && !appState.isRecording {
+    if permissions.screen == "Allowed" && !appState.isRecording && !pauseManager.isPaused {
       HStack(spacing: TBDKit.s3) {
         Text("Screen capture is off. Companion records nothing until you start it.")
           .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.brickInk)
         Spacer(minLength: TBDKit.s3)
-        Button("Start capture") { AppState.shared.setRecording(true, analyticsReason: "access_pane") }
+        Button("Start capture") { RecordingControl.start(reason: "access_pane") }
           .buttonStyle(TBDButtonStyle(.primary))
       }
     }

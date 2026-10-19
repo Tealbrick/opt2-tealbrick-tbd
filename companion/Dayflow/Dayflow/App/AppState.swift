@@ -45,8 +45,8 @@ final class AppState: ObservableObject, AppStateManaging {  // <-- Add AppStateM
   @discardableResult
   static func migrateRecordingDefaultIfNeeded(_ defaults: UserDefaults = .standard) -> Bool {
     guard !defaults.bool(forKey: recordingDefaultMigrationKey) else { return false }
-    defaults.set(true, forKey: recordingDefaultMigrationKey)
     defaults.removeObject(forKey: "isRecording")
+    defaults.set(true, forKey: recordingDefaultMigrationKey)   // after the removal: a crash in between re-runs it
     return true
   }
 

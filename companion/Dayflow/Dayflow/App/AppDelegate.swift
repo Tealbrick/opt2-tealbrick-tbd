@@ -63,6 +63,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     LaunchAtLoginManager.shared.bootstrapDefaultPreference()
     deepLinkRouter = AppDeepLinkRouter()
 
+    // TBD-DEV7-1: once, drop the "capture off" that dev.7's setup saved. Before the didOnboard check, so on a fresh
+    // install it runs (and sets its flag) before setup; a pause made later is then never cleared (review dev.8 #1).
+    AppState.migrateRecordingDefaultIfNeeded()
+
     // Check if we've passed the screen recording permission step
     let didOnboard = UserDefaults.standard.bool(forKey: "didOnboard")
 
@@ -73,8 +77,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Only attempt to start recording if we're past the screen step or fully onboarded.
     if didOnboard {
-      // TBD-DEV7-1: once, drop the "capture off" that dev.7's setup saved (AppState.migrateRecordingDefaultIfNeeded).
-      AppState.migrateRecordingDefaultIfNeeded()
       // Onboarding complete - enable persistence and restore user preference
       AppState.shared.enablePersistence()
 

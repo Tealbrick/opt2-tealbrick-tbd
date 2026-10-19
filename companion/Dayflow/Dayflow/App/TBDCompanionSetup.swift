@@ -3,7 +3,8 @@ import CoreGraphics
 import AppKit
 import TBDDesign
 
-/// Minimal local setup. No vendor intro, account requirement, or automatic capture.
+/// Minimal local setup. No vendor intro or account requirement. Capture starts when Screen Recording is granted
+/// (TBD-DEV7-1); WP-ONB (C285) replaces this screen.
 struct TBDCompanionSetup: View {
   @AppStorage("didOnboard") private var completed = false
   @State private var screenAccess = CGPreflightScreenCaptureAccess()
@@ -28,7 +29,7 @@ struct TBDCompanionSetup: View {
     [
       TBDStep("Screen access", optional: true, skipLabel: "Skip, allow it later") {
         VStack(alignment: .leading, spacing: TBDKit.s5) {
-          Text("Your screen-activity timeline and Daily recap. Capture stays paused until you enable it.")
+          Text("Your screen-activity timeline and Daily recap. Capture starts as soon as macOS allows screen recording.")
             .font(TBDTokens.Typography.body)
             .foregroundStyle(TBDColor.muted)
           HStack {
