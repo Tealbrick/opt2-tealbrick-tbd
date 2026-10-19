@@ -57,8 +57,8 @@ export interface AgentQuestion {
 export type HelperToAgent =
   | { type: "init"; config: AgentConfig }
   /** `content` carries attached files (Anthropic content blocks, text first); `text` alone otherwise. */
-  /** `selfTest`: the setup's check (WP-HARNESS L3): one throwaway exchange, no session saved; a harness that can
-   *  report its loaded tool families answers `reply` as JSON `{ reply, tools }`. */
+  /** `selfTest`: the setup's check (WP-HARNESS L3): one throwaway exchange, no session saved, no tools bound to the model.
+   *  A harness that can report its tool families answers `done.selfTest`. */
   | { type: "turn"; id: string; text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean }
   | { type: "cancel"; id: string }
   | { type: "permission"; reqId: string; allow: boolean; message?: string }
@@ -72,12 +72,22 @@ export type AgentEvent =
   | { kind: "activity"; label: string | null }
   | { kind: "session"; sessionId: string };
 
+/**
+ * What a self-test turn reports about the tool families (WP-HARNESS L3, check 4): the families the config asked for,
+ * the ones that came up, and one cheap read-only probe each (null = answered, text = the error).
+ */
+export interface SelfTestTools {
+  configured: string[];
+  loaded: string[];
+  probes: Record<string, string | null>;
+}
+
 export type AgentToHelper =
   | { type: "ready" }
   | { type: "event"; id: string; event: AgentEvent }
   | { type: "permission_request"; id: string; reqId: string; tool: string; detail: string; input: Record<string, unknown> }
   | { type: "question"; id: string; reqId: string; questions: AgentQuestion[] }
-  | { type: "done"; id: string; sessionId: string; reply: string }
+  | { type: "done"; id: string; sessionId: string; reply: string; selfTest?: SelfTestTools }
   | { type: "error"; id?: string; message: string };
 
 /**

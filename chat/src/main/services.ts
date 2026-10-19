@@ -11,7 +11,7 @@ import { currentControlPlane } from "./controlPlanes";
 import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
 import { createEntitlements, type Entitlements } from "./entitlements";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
-import { createDefaultAgent, type AgentRoute, type DefaultAgent } from "./defaultAgent";
+import { createDefaultAgent, type AgentRoute, type DefaultAgent, type DefaultAgentDeps } from "./defaultAgent";
 import { askPerson } from "./asks";
 import { startSignerSocket } from "./signerSocket";
 import { relayLaunch, type RelayLaunch } from "./relayLaunch";
@@ -195,6 +195,8 @@ export interface Services {
   entitlements: Entitlements;
   agentIdentity: AgentIdentity;
   agent: DefaultAgent;
+  /** A temporary agent for the setup's self-test (see getServices). */
+  agentFor(harness?: string): DefaultAgent;
 }
 
 let services: Services | null = null;
@@ -218,16 +220,17 @@ export function getServices(): Services {
     },
   });
   const resources = resourcesDir();
-  const agent = createDefaultAgent({
+  /** The agent's dependencies: shared by the agent Chat uses and by the temporary agents of the setup's self-test. */
+  const agentDeps = (model: () => Promise<AgentRoute>, stateName: string, decide: DefaultAgentDeps["permission"]): DefaultAgentDeps => ({
     node: process.execPath,
     entry: join(resources, "agent.mjs"),
-    model: async () => (await nativeCall("agentModel")) as AgentRoute,
+    model,
     config: async () => {
       const c = agentIdentity.connection();
       const relay = c ? await agentRelay(c) : undefined;
       return {
         cwd: agentWorkspace(),
-        stateDir: join(dataDir(), "agent"),
+        stateDir: join(dataDir(), stateName),
         claudeExecutable: join(resources, "claude"),
         companionCli: process.env.TBD_COMPANION_CLI,
         listeningCli: process.env.TBD_LISTENING_CLI,
@@ -236,15 +239,20 @@ export function getServices(): Services {
         systemAppend: `Your working folder is ${agentWorkspace()}. Other folders need the person's consent; some locations (keys, credentials, browser data) are never available.`,
       };
     },
-    permission,
+    permission: decide,
   });
+  const agent = createDefaultAgent(agentDeps(async () => (await nativeCall("agentModel")) as AgentRoute, "agent", permission));
+  // A temporary agent for the self-test: the route as if `harness` were chosen, its own state folder, and it never
+  // asks the person for anything (a self-test has no tools bound to the model). The caller stops it.
+  const agentFor = (harness?: string) =>
+    createDefaultAgent(agentDeps(async () => (await (harness ? nativeCall("agentModel", harness) : nativeCall("agentModel"))) as AgentRoute, "agent-selftest", async () => ({ allow: false, message: "A self-test does not use tools." })));
   // C282: what the workspace paid for; TBD_SHAPE_LOG=1 logs the reads' field names and counts only (no values).
   const entitlements = createEntitlements({
     licences: () => portal.licences(),
     instances: (ws) => portal.instances(ws),
     log: process.env.TBD_SHAPE_LOG === "1" ? (line) => process.stderr.write(`[helper:shape] ${line}\n`) : undefined,
   });
-  services = { portal, agentIdentity, agent, entitlements };
+  services = { portal, agentIdentity, agent, agentFor, entitlements };
   return services;
 }
 

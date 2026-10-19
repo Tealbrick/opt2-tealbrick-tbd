@@ -5,6 +5,10 @@ const env = { hasKey: process.env.ANTHROPIC_API_KEY === "sk-test", leaked: Objec
 createInterface({ input: process.stdin }).on("line", (line) => {
   const m = JSON.parse(line);
   if (m.type === "init") return out({ type: "ready" });
+  // Like the real agents: leave 300 ms after "shutdown".
+  if (m.type === "shutdown") return void setTimeout(() => process.exit(0), 300);
+  if (m.type === "turn" && m.text === "quick") return out({ type: "done", id: m.id, sessionId: "sess-q", reply: "quick" });
+  if (m.type === "turn" && m.text === "slow") return void setTimeout(() => out({ type: "done", id: m.id, sessionId: "sess-s", reply: "slow done" }), 900);
   if (m.type === "turn" && m.text === "ask") {
     (globalThis as any).asking = m;
     return out({ type: "question", id: m.id, reqId: "q1", questions: [{ question: "Which day?", options: [{ label: "Today" }, { label: "Yesterday" }] }] });

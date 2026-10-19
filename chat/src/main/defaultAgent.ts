@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent } from "../agent/protocol";
+import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent, SelfTestTools } from "../agent/protocol";
 import type { ContentBlock } from "../shared/message";
 
 /**
@@ -95,6 +95,9 @@ export const claudeAgentSdk: HarnessAdapter = {
   },
 };
 
+/** The LangChain agent uses these two keys only (no cloud providers); any other secret name in its route is refused. */
+export const LANGCHAIN_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+
 /**
  * The LangChain agent (WP-HARNESS L1): a small LangGraph graph in the bundled agent-langchain.mjs. The process gets
  * PATH/HOME/TMPDIR and the person's declared model credential(s) only (Anthropic or OpenAI key). The route's provider,
@@ -104,13 +107,13 @@ export const langchain: HarnessAdapter = {
   id: "langchain",
   title: "LangChain agent",
   processEnv(route, host) {
-    const secrets = checked(route.secretEnv, MODEL_SECRET_NAMES, "secret");
+    const secrets = checked(route.secretEnv, LANGCHAIN_SECRET_NAMES, "secret");
     if (!secrets.ANTHROPIC_API_KEY && route.apiKey && route.provider !== "openai") secrets.ANTHROPIC_API_KEY = route.apiKey;
     return { PATH: "/usr/bin:/bin", HOME: host.HOME ?? "", TMPDIR: host.TMPDIR ?? "/tmp", ...secrets };
   },
   initModel(route) {
     const env = checked(route.env, MODEL_PLAIN_NAMES, "provider");
-    const secretNames = Object.keys(checked(route.secretEnv, MODEL_SECRET_NAMES, "secret"));
+    const secretNames = Object.keys(checked(route.secretEnv, LANGCHAIN_SECRET_NAMES, "secret"));
     return {
       model: route.model, ...(route.provider ? { provider: route.provider } : {}), baseUrl: route.baseUrl,
       ...(Object.keys(env).length ? { env } : {}), ...(secretNames.length ? { secretNames } : {}),
@@ -155,7 +158,7 @@ export interface DefaultAgentDeps {
 }
 
 interface PendingTurn extends TurnCallbacks {
-  resolve(result: { sessionId: string; reply: string }): void;
+  resolve(result: { sessionId: string; reply: string; selfTest?: SelfTestTools }): void;
   reject(error: Error): void;
   sessionId: string;
 }
@@ -186,22 +189,28 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     const harness = harnessFor(route);
     const rest = await deps.config();
     const env = harness.processEnv(route, process.env);
+    // A stopped start must not touch any state of the agent that replaced it (secretValues included).
+    if (gen !== generation) throw new Error("The agent was stopped.");
     // A provider error can quote the key; nothing the agent sends back may carry it into Chat or the helper log.
     secretValues = Object.entries(env).filter(([name]) => MODEL_SECRET_NAMES.has(name)).map(([, value]) => value);
-    if (gen !== generation) throw new Error("The agent was stopped.");
     const proc = (deps.spawnProcess ?? spawn)(deps.node, [harness.entry?.(dirname(deps.entry)) ?? deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     child = proc;
     proc.stderr.on("data", () => { /* agent logs stay local; never forwarded with content */ });
     const ready = new Promise<void>((resolve, reject) => {
       const lines = createInterface({ input: proc.stdout });
       lines.on("line", (line) => {
+        // A process that stop() or restart() replaced may still talk for a moment: its lines are not for the new one.
+        if (proc !== child) return;
         let m: AgentToHelper;
         try { m = JSON.parse(line) as AgentToHelper; } catch { return; }
         if (m.type === "ready") { resolve(); return; }
         handle(m);
       });
       proc.once("exit", (code) => {
-        if (child === proc) child = null;
+        // Only the current process may fail the open turns. An old one that exits after restart() must not
+        // end a turn of the new one (stop() already ended the turns of the old one).
+        if (child !== proc) { reject(new Error("The agent was stopped.")); return; }
+        child = null;
         reject(new Error(`The agent stopped (exit ${code ?? "signal"}).`));
         failAll("The agent stopped. Send your message again.");
       });
@@ -232,7 +241,12 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else send({ type: "answer", reqId: m.reqId, answers: null });
     } else if (m.type === "done") {
       const t = turns.get(m.id);
-      if (t) { turns.delete(m.id); t.resolve({ sessionId: m.sessionId, reply: scrub(m.reply) }); }
+      if (t) {
+        turns.delete(m.id);
+        // Probe errors can quote the key like any provider error: scrubbed with the rest.
+        const selfTest = m.selfTest ? (JSON.parse(scrub(JSON.stringify(m.selfTest))) as SelfTestTools) : undefined;
+        t.resolve({ sessionId: m.sessionId, reply: scrub(m.reply), ...(selfTest ? { selfTest } : {}) });
+      }
     } else if (m.type === "error") {
       if (!m.id) return;
       const t = turns.get(m.id);
@@ -250,10 +264,11 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
   }
 
   return {
-    async sendTurn(input: { text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean } & TurnCallbacks): Promise<{ sessionId: string; reply: string; turnId: string }> {
+    async sendTurn(input: { text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean; onStart?(turnId: string): void } & TurnCallbacks): Promise<{ sessionId: string; reply: string; turnId: string; selfTest?: SelfTestTools }> {
       await ensure();
       const id = randomUUID();
-      const result = await new Promise<{ sessionId: string; reply: string }>((resolve, reject) => {
+      input.onStart?.(id);
+      const result = await new Promise<{ sessionId: string; reply: string; selfTest?: SelfTestTools }>((resolve, reject) => {
         turns.set(id, { ...input, resolve, reject, sessionId: input.sessionId ?? "" });
         send({ type: "turn", id, text: input.text, content: input.content, sessionId: input.sessionId, ...(input.selfTest ? { selfTest: true } : {}) });
       });
@@ -261,20 +276,20 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     },
     /**
      * The setup's check of the running harness (WP-HARNESS L3, the 4 checks): the agent process starts (1), its model
-     * answers (2) one round trip (3); a harness that reports them lists its tool families (4). Never throws.
+     * answers (2) one round trip (3); a harness that reports them lists its tool families, each probed (4). Never
+     * throws. On a timeout the turn is cancelled. Run it on a TEMPORARY agent, never on the one Chat is using.
      */
-    async selfTest(timeoutMs = 90_000): Promise<{ ok: boolean; reply?: string; tools?: string[]; error?: string }> {
+    async selfTest(timeoutMs = 90_000): Promise<{ ok: boolean; reply?: string; tools?: SelfTestTools; error?: string }> {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let turnId = "";
       try {
-        const run = this.sendTurn({ text: "Reply with the single word OK.", selfTest: true, onDelta: () => {}, onActivity: () => {} });
-        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("The agent did not answer within 90 seconds.")), timeoutMs); });
-        const { reply } = await Promise.race([run, timeout]);
-        try {
-          const parsed = JSON.parse(reply) as { reply?: unknown; tools?: unknown };
-          if (typeof parsed.reply === "string" && Array.isArray(parsed.tools)) return { ok: true, reply: parsed.reply, tools: parsed.tools.map(String) };
-        } catch { /* a harness without the self-test shape: the reply itself */ }
-        return { ok: true, reply };
+        const run = this.sendTurn({ text: "Reply with the single word OK.", selfTest: true, onStart: (id) => { turnId = id; }, onDelta: () => {}, onActivity: () => {} });
+        run.catch(() => {}); // after a timeout the cancelled turn ends with an error nobody awaits
+        const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`The agent did not answer within ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs); });
+        const { reply, selfTest } = await Promise.race([run, timeout]);
+        return { ok: true, reply, ...(selfTest ? { tools: selfTest } : {}) };
       } catch (error) {
+        if (turnId) this.cancel(turnId);
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       } finally {
         if (timer) clearTimeout(timer);
@@ -301,7 +316,13 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     /** Stop the agent process (open turns end with an error) and start it again with the current model route. */
     async restart(): Promise<void> {
       this.stop();
-      await ensure();
+      try {
+        await ensure();
+      } catch (error) {
+        // Another stop() ended this start before it spawned: the restart is still wanted; try once more.
+        if (!(error instanceof Error) || error.message !== "The agent was stopped.") throw error;
+        await ensure();
+      }
     },
     running: () => child !== null,
   };
