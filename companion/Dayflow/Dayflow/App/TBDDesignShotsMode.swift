@@ -104,10 +104,8 @@
       _ = TBDListeningRuntime.shared.previewSettings(section: "capture")
 
       let main = CGSize(width: 1280, height: 800)
-      let settingsTabs = [
-        "engine", "privacy", "providers", "storage", "aiTools", "data", "capture", "audioAI", "audioSystem",
-        "account", "permissions", "other", "about",
-      ]
+      let wide = CGSize(width: 1600, height: 1000)
+      let settingsTabs = TBDSettingsRoute.sections
       for dark in [false, true] {
         let theme = dark ? "dark" : "light"
         try render(MainView(), size: main, dark: dark, name: "timeline-\(theme)")
@@ -124,6 +122,8 @@
         }
         for tab in settingsTabs {
           try render(SettingsView(initialSection: tab).padding(15), size: main, dark: dark, name: "settings-\(tab)-\(theme)")
+          // A larger window too: Settings must use the width it is given (TBD-UX-01).
+          try render(SettingsView(initialSection: tab).padding(15), size: wide, dark: dark, name: "settings-\(tab)-1600-\(theme)")
         }
         try render(TBDCompanionSetup(), size: main, dark: dark, name: "setup-\(theme)")
         try render(StatusMenuView(dismissMenu: {}), size: CGSize(width: 320, height: 640), dark: dark, name: "menu-\(theme)")

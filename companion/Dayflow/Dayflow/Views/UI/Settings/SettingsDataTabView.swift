@@ -26,8 +26,7 @@ struct SettingsDataTabView: View {
       > timelineDisplayDate(from: viewModel.exportEndDate)
 
     return SettingsSection(
-      title: String(localized: "Export your data"),
-      subtitle: String(localized: "Move your timeline into tools you already use."),
+      title: "",   // the pane header "Export" names it
       isFirst: true
     ) {
       VStack(alignment: .leading, spacing: 14) {

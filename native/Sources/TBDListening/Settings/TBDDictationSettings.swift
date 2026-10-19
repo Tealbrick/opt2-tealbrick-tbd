@@ -70,7 +70,7 @@ struct TBDDictationHotkeyRows: View {
                     ForEach(guide, id: \.action) { row in
                         HStack(spacing: TBDTokens.Space.sm) {
                             TBDKeyCap(row.key)
-                            Text(row.verb).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).frame(width: 72, alignment: .leading)
+                            Text(row.verb).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).lineLimit(1).fixedSize().frame(minWidth: 88, alignment: .leading)
                             Text(row.action).font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink)
                             Text(row.detail).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
                         }

@@ -55,8 +55,8 @@ enum SettingsStyle {
 
 // MARK: - SettingsSection
 //
-// A section is a ruled block: a hairline on top (the first section of a page
-// takes the ink rule), a title (with optional subtitle) and content beneath.
+// A section is a ruled block: a hairline on top (none for the first section of
+// a pane: the pane header sits there), a title (with optional subtitle) and content beneath.
 // No container chrome — the paper is the container. Optional right-rail
 // trailing view for metadata ("Last updated 3m ago", totals, badges).
 
@@ -83,27 +83,33 @@ struct SettingsSection<Content: View, Trailing: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Rectangle()
-        .fill(isFirst ? TBDColor.ink : TBDColor.line)
-        .frame(height: TBDKit.hair)
-        .padding(.bottom, TBDKit.s5)
-
-      HStack(alignment: .firstTextBaseline, spacing: TBDKit.s4) {
-        VStack(alignment: .leading, spacing: TBDKit.s1) {
-          Text(title)
-            .font(TBDTokens.Typography.title)
-            .foregroundStyle(TBDColor.ink)
-          if let subtitle {
-            Text(subtitle)
-              .font(TBDTokens.Typography.hint)
-              .foregroundStyle(TBDColor.muted)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        Spacer(minLength: TBDKit.s3)
-        trailing()
+      // The pane header (SettingsPaneHeader) opens every pane; the first section needs no rule of its own.
+      if !isFirst {
+        Rectangle()
+          .fill(TBDColor.line)
+          .frame(height: TBDKit.hair)
+          .padding(.bottom, TBDKit.s5)
       }
-      .padding(.bottom, TBDKit.s4)
+
+      // An untitled section (title "") is the pane's own first block: the pane header names it.
+      if !title.isEmpty || subtitle != nil {
+        HStack(alignment: .firstTextBaseline, spacing: TBDKit.s4) {
+          VStack(alignment: .leading, spacing: TBDKit.s1) {
+            Text(title)
+              .font(TBDTokens.Typography.title)
+              .foregroundStyle(TBDColor.ink)
+            if let subtitle {
+              Text(subtitle)
+                .font(TBDTokens.Typography.hint)
+                .foregroundStyle(TBDColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          Spacer(minLength: TBDKit.s3)
+          trailing()
+        }
+        .padding(.bottom, TBDKit.s4)
+      }
 
       content()
     }
@@ -118,6 +124,31 @@ extension SettingsSection where Trailing == EmptyView {
     self.init(
       title: title, subtitle: subtitle, isFirst: isFirst, trailing: { EmptyView() },
       content: content)
+  }
+}
+
+// MARK: - SettingsPaneHeader
+//
+// Opens every Settings pane (TBD-UX-01): the pane title in the display role and
+// one line under it. Panes do not draw their own top title.
+
+struct SettingsPaneHeader: View {
+  let title: String
+  let subtitle: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s1) {
+      Text(title)
+        .font(TBDTokens.Typography.display)
+        .tracking(TBDTokens.Typography.displayTracking)
+        .foregroundStyle(TBDColor.ink)
+        .accessibilityAddTraits(.isHeader)
+      Text(subtitle)
+        .font(TBDTokens.Typography.hint)
+        .foregroundStyle(TBDColor.muted)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

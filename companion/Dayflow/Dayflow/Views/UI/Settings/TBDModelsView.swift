@@ -22,22 +22,26 @@ struct TBDModelsView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
-      TBDSegmented(selection: $page, options: ["Tasks", "Connections", "Transcription", "Advanced"].map { ($0, $0) })
+      TBDSegmented(selection: $page, options: TBDSettingsRoute.modelsPages.map { ($0, $0) })
       switch page {
       case "Transcription":
         Text("Speech recognition runs locally. Select engines and downloads below.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
         TBDListeningRuntime.shared.settingsContent(section: "engine")
       case "Advanced":
-        Text("Existing provider-specific settings remain available. Shared task routes take precedence when assigned.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
-        DisclosureGroup { screenSettings() } label: { Text("Screen analysis providers").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink) }
-        TBDListeningRuntime.shared.settingsContent(section: "ai")
+        // One scroll for the page: the providers block can be long when opened (TBD-UX-01 review).
+        ScrollView(.vertical, showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 18) {
+            Text("Existing provider-specific settings remain available. Shared task routes take precedence when assigned.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
+            DisclosureGroup { screenSettings() } label: { Text("Screen analysis providers").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink) }
+            TBDListeningRuntime.shared.settingsContent(section: "ai", scrolls: false)
+          }
+        }
       default:
         ScrollView(.vertical, showsIndicators: false) {
           VStack(alignment: .leading, spacing: 22) {
             if page == "Connections" { connections }
             else {
-              Text("Models by task").font(TBDTokens.Typography.display).tracking(TBDTokens.Typography.displayTracking).foregroundStyle(TBDColor.ink)
-              Text("Choose a connection once and reuse it. Selecting a model does not enable automatic cleanup. No automatic cross-provider fallback.")
+              Text("Set up a connection once, then choose it for each task below. Choosing a model does not turn on cleanup. TBD never moves a task to another provider by itself.")
                 .font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
               TBDAgentModelForm { reload() }
               route("Cleanup", task: "cleanup", detail: "Optional transcript correction; shared model, independent switches.")
@@ -52,12 +56,11 @@ struct TBDModelsView: View {
           }.padding(.bottom, 24)
         }
       }
-    }.padding(.top, 24)
+    }
     .onAppear { reload() }
   }
   private var connections: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Connections").font(TBDTokens.Typography.display).tracking(TBDTokens.Typography.displayTracking).foregroundStyle(TBDColor.ink)
       Text("OpenAI-compatible or Anthropic endpoints. Keys are held in Keychain and reused only by routes assigned to that connection. Existing provider configurations remain unchanged until you assign a shared route.").font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
       ForEach(state.connections) { connection in
         VStack(alignment: .leading) {

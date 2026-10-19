@@ -156,7 +156,7 @@ struct SettingsAccountSection: View {
   }
 
   var body: some View {
-    SettingsSection(title: String(localized: "Account & Workspace"), isFirst: true) {
+    SettingsSection(title: "", isFirst: true) {
       VStack(alignment: .leading, spacing: TBDKit.s4) {
         SettingsStatusDot(state: statusState, label: account.status)
         if !account.email.isEmpty {
@@ -164,14 +164,21 @@ struct SettingsAccountSection: View {
         }
         ruled
         SettingsRow(label: String(localized: "Portal"), showsDivider: false) {
-          Picker("Portal", selection: Binding(get: { account.activeProfile }, set: { id in
-            Task { await account.perform("activateControlPlane", args: [id]) }
-          })) {
-            ForEach(account.profiles) { Text($0.name).tag($0.id) }
+          if account.profiles.isEmpty {
+            // The list comes from the Chat helper; without it an empty picker looked broken (TBD-UX-01).
+            Text("Not loaded. Use Refresh status.")
+              .font(TBDTokens.Typography.hint)
+              .foregroundStyle(TBDColor.muted)
+          } else {
+            Picker("Portal", selection: Binding(get: { account.activeProfile }, set: { id in
+              Task { await account.perform("activateControlPlane", args: [id]) }
+            })) {
+              ForEach(account.profiles) { Text($0.name).tag($0.id) }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 260)
+            .disabled(account.signedIn || account.busy)
           }
-          .labelsHidden()
-          .frame(maxWidth: 260)
-          .disabled(account.signedIn || account.busy)
         }
         if let profile = account.profiles.first(where: { $0.id == account.activeProfile }) {
           Text(profile.issuer)

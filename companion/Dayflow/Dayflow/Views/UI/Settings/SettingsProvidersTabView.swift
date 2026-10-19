@@ -311,7 +311,7 @@ struct SettingsProvidersTabView: View {
   private var geminiModelSection: some View {
     SettingsSection(
       title: String(localized: "Gemini model preference"),
-      subtitle: String(localized: "Choose which Gemini model Tealbrick should prioritize.")
+      subtitle: String(localized: "Choose which Gemini model TBD should prioritize.")
     ) {
       VStack(alignment: .leading, spacing: 14) {
         TBDSegmented(
@@ -329,7 +329,7 @@ struct SettingsProvidersTabView: View {
           .foregroundStyle(TBDColor.muted)
 
         Text(
-          "Tealbrick automatically downgrades if your chosen model is rate limited or unavailable."
+          "TBD automatically downgrades if your chosen model is rate limited or unavailable."
         )
         .font(TBDTokens.Typography.hint)
         .foregroundStyle(TBDColor.muted)
@@ -345,11 +345,11 @@ struct SettingsProvidersTabView: View {
     case .gemini:
       promptSection(
         title: String(localized: "Gemini prompt customization"),
-        subtitle: String(localized: "Override Tealbrick's defaults to tailor card generation."),
+        subtitle: String(localized: "Override TBD's defaults to tailor card generation."),
         intro:
           String(
             localized:
-              "Overrides apply only when their toggle is on. Unchecked sections fall back to Tealbrick's defaults."
+              "Overrides apply only when their toggle is on. Unchecked sections fall back to TBD's defaults."
           ),
         sections: [
           promptEditorConfig(
@@ -431,7 +431,7 @@ struct SettingsProvidersTabView: View {
       intro:
         String(
           localized:
-            "Overrides apply only when their toggle is on. Unchecked sections fall back to Tealbrick's defaults."
+            "Overrides apply only when their toggle is on. Unchecked sections fall back to TBD's defaults."
         ),
       sections: [
         promptEditorConfig(
@@ -513,7 +513,7 @@ struct SettingsProvidersTabView: View {
         HStack {
           Spacer()
           SettingsSecondaryButton(
-            title: String(localized: "Reset to Tealbrick defaults"),
+            title: String(localized: "Reset to TBD defaults"),
             systemImage: "arrow.counterclockwise",
             action: onReset
           )
@@ -685,7 +685,7 @@ struct LocalModelUpgradeSheet: View {
               .font(TBDTokens.Typography.title)
               .foregroundStyle(TBDColor.ink)
             Text(
-              "Follow the steps below, run a quick test, and Tealbrick will switch you over automatically."
+              "Follow the steps below, run a quick test, and TBD will switch you over automatically."
             )
             .font(TBDTokens.Typography.hint)
             .foregroundStyle(TBDColor.muted)
@@ -748,7 +748,7 @@ struct LocalModelUpgradeSheet: View {
         )
 
         Text(
-          "Once the test succeeds, Tealbrick updates your settings to \(preset.displayName) automatically."
+          "Once the test succeeds, TBD updates your settings to \(preset.displayName) automatically."
         )
         .font(TBDTokens.Typography.hint)
         .foregroundStyle(TBDColor.muted)

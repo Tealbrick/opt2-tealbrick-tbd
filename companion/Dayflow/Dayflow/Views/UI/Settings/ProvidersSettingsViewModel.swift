@@ -322,7 +322,7 @@ final class ProvidersSettingsViewModel: ObservableObject {
       providerRoutingErrorMessage =
         String(
           localized:
-            "Tealbrick couldn't load your provider routing. Your saved providers were left unchanged."
+            "TBD couldn't load your provider routing. Your saved providers were left unchanged."
         )
     }
   }
@@ -541,7 +541,7 @@ final class ProvidersSettingsViewModel: ObservableObject {
       providerRoutingErrorMessage =
         String(
           localized:
-            "Tealbrick couldn't save your provider routing. Your previous selection is still active.")
+            "TBD couldn't save your provider routing. Your previous selection is still active.")
       return false
     }
   }

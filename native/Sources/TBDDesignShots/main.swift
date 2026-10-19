@@ -332,25 +332,24 @@ struct SettingsProof: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: TBDKit.s5) {
-                TBDNavSection("Chat") { TBDNavItem("Agent model", symbol: "cpu", current: false) {} }
+                // Same groups and order as the host's Settings (TBDSettingsRoute, TBD-UX-01); the kit ring stays on
+                // here because this proof checks the kit component itself.
+                TBDNavSection("App") {
+                    TBDNavItem("Account", symbol: "person.crop.circle", current: false) {}
+                    TBDNavItem("Models", symbol: "cpu", current: false) {}
+                    TBDNavItem("Access", symbol: "lock.shield", current: false) {}
+                    TBDNavItem("General", symbol: "slider.horizontal.3", current: false) {}
+                    TBDNavItem("About", symbol: "info.circle", current: false) {}
+                }
                 TBDNavSection("Companion") {
                     TBDNavItem("Screen capture", symbol: "eye.slash", current: false) {}
-                    TBDNavItem("Providers", symbol: "network", current: false) {}
                     TBDNavItem("Storage", symbol: "internaldrive", current: false) {}
                     TBDNavItem("Tools", symbol: "wrench.and.screwdriver", current: false) {}.environment(\.tbdForcedState, .hover)
                     TBDNavItem("Export", symbol: "square.and.arrow.up", current: false) {}
                 }
                 TBDNavSection("Listen") {
                     TBDNavItem("Capture", symbol: "mic", current: true) {}
-                    TBDNavItem("Speech", symbol: "waveform", current: false) {}
                     TBDNavItem("System", symbol: "gearshape", current: false) {}
-                }
-                TBDNavSection("App") {
-                    TBDNavItem("Account", symbol: "person.crop.circle", current: false) {}
-                    TBDNavItem("Access", symbol: "lock.shield", current: false) {}
-                    TBDNavItem("General", symbol: "slider.horizontal.3", current: false) {}
-                    TBDNavItem("About", symbol: "info.circle", current: false) {}
-                    TBDNavItem("Updates", symbol: "sparkles", current: false) {}
                 }
                 Spacer(minLength: 0)
             }

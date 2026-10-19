@@ -19,8 +19,7 @@ struct SettingsOtherTabView: View {
 
   private var appPreferencesSection: some View {
     SettingsSection(
-      title: String(localized: "App preferences"),
-      subtitle: String(localized: "General toggles and telemetry settings."),
+      title: "",   // the pane header "General" names it
       isFirst: true
     ) {
       VStack(alignment: .leading, spacing: 0) {
@@ -28,7 +27,7 @@ struct SettingsOtherTabView: View {
           label: String(localized: "App language"),
           subtitle: String(
             localized:
-              "Choose a language for Tealbrick only. Quit and reopen the app to apply a change.")
+              "Choose a language for TBD only. Quit and reopen the app to apply a change.")
         ) {
           Picker("App language", selection: $appLanguage) {
             ForEach(AppLanguage.allCases) { language in
@@ -58,7 +57,7 @@ struct SettingsOtherTabView: View {
         }
 
         SettingsRow(
-          label: String(localized: "Launch Tealbrick at login"),
+          label: String(localized: "Launch TBD at login"),
           subtitle:
             String(
               localized:
@@ -73,13 +72,9 @@ struct SettingsOtherTabView: View {
           )
         }
 
-        SettingsRow(label: String(localized: "Telemetry and crash uploads")) {
-          Text("Disabled").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
-        }
-
         SettingsRow(
           label: String(localized: "Show Dock icon"),
-          subtitle: String(localized: "When off, Tealbrick runs as a menu bar-only app.")
+          subtitle: String(localized: "When off, TBD runs as a menu bar-only app.")
         ) {
           SettingsToggle(isOn: $viewModel.showDockIcon)
         }
@@ -96,7 +91,7 @@ struct SettingsOtherTabView: View {
           subtitle:
             String(
               localized:
-                "When off, Tealbrick won't automatically open goal setup or yesterday's review after 4am."
+                "When off, TBD won't automatically open goal setup or yesterday's review after 4am."
             )
         ) {
           SettingsToggle(isOn: $viewModel.showDailyGoalPopups)

@@ -6,14 +6,11 @@ struct TBDAboutView: View {
   @AppStorage(TBDProductLinks.supportKey) private var support = ""
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsStyle.sectionSpacing) {
-      SettingsSection(title: String(localized: "TBD"), isFirst: true) {
+      SettingsSection(title: "", isFirst: true) {   // the pane header "About" names it
         VStack(alignment: .leading, spacing: TBDKit.s4) {
           Text("Chat · Companion · Listen")
             .font(TBDTokens.Typography.body)
             .foregroundStyle(TBDColor.ink)
-          Text("Local build · updates are installed manually. No donor update feed is used.")
-            .font(TBDTokens.Typography.hint)
-            .foregroundStyle(TBDColor.muted)
           TBDUpdatesSection()
           Link("Website", destination: TBDProductLinks.website)
             .font(TBDTokens.Typography.control)

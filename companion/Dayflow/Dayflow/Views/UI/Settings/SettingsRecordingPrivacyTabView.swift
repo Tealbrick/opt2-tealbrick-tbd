@@ -13,8 +13,7 @@ struct SettingsRecordingPrivacyTabView: View {
 
   var body: some View {
     SettingsSection(
-      title: String(localized: "Recording privacy"),
-      subtitle: String(localized: "Choose apps Tealbrick should hide from screenshots."),
+      title: "",   // the pane header "Screen capture" names it
       isFirst: true
     ) {
       VStack(alignment: .leading, spacing: 18) {

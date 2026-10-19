@@ -20,4 +20,6 @@ public enum TBDMetrics {
     /// .tbd-app-chip: padding 0 10 0 6, 28 high.
     public static let appChipPaddingLeading: CGFloat = 6
     public static let appChipPaddingTrailing: CGFloat = 10
+    /// Settings content column (TBD-UX-01): every pane uses the tile width up to this, then centres.
+    public static let settingsContentMax: CGFloat = 960
 }
