@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent } from "../agent/protocol";
 import type { ContentBlock } from "../shared/message";
 
@@ -21,7 +22,7 @@ import type { ContentBlock } from "../shared/message";
  * Every harness is one adapter that turns the route the native app resolved (Settings → Models, or the setup flow)
  * into (a) the environment of the agent process and (b) the model part of its init message. The supervisor
  * (defaultAgent.ts) and the stdio protocol (agent/protocol.ts) stay the same for every harness. Only the Claude
- * Agent SDK exists today; Claude Code CLI, Codex, LangChain and Eve come later (PLAN-WP-HARNESS.md).
+ * Agent SDK and LangChain (L1) exist today; Claude Code CLI, Codex and Eve come later (PLAN-WP-HARNESS.md).
  *
  * Rules (CREDENTIALS §12, K3, C287): the agent process gets PATH/HOME/TMPDIR and the person's OWN model credential
  * only, under a name from MODEL_SECRET_NAMES; provider settings only under names from MODEL_PLAIN_NAMES. Anything else in a
@@ -35,14 +36,16 @@ export const MODEL_PLAIN_NAMES: ReadonlySet<string> = new Set([
   "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_FOUNDRY_RESOURCE",
   "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 ]);
-export const MODEL_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]);
+export const MODEL_SECRET_NAMES: ReadonlySet<string> = new Set(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]);
 
 /** What the native side resolves for TBD's agent ("agentModel"). */
 export interface AgentRoute {
   /** Harness adapter id; absent = the Claude Agent SDK (earlier native builds). */
   harness?: string;
   model: string;
-  /** Anthropic or Anthropic-compatible base URL (the registry route). */
+  /** Model provider for harnesses that offer more than one (LangChain); absent = "anthropic". */
+  provider?: "anthropic" | "openai";
+  /** Anthropic or Anthropic-compatible base URL (the registry route); OpenAI-compatible for provider "openai". */
   baseUrl?: string;
   /** The person's Anthropic key (registry route); kept for the earlier shape. */
   apiKey?: string;
@@ -61,6 +64,8 @@ export interface HarnessAdapter {
   processEnv(route: AgentRoute, host: NodeJS.ProcessEnv): Record<string, string>;
   /** The model part of the init message (plain only). */
   initModel(route: AgentRoute): AgentModel;
+  /** The agent entry for this harness, given the folder of the default entry (the app's resources); absent = the default entry. */
+  entry?(resourcesDir: string): string;
 }
 
 function checked(values: Record<string, string> | undefined, allowed: ReadonlySet<string>, kind: string): Record<string, string> {
@@ -90,7 +95,31 @@ export const claudeAgentSdk: HarnessAdapter = {
   },
 };
 
-export const HARNESSES: Record<string, HarnessAdapter> = { [claudeAgentSdk.id]: claudeAgentSdk };
+/**
+ * The LangChain agent (WP-HARNESS L1): a small LangGraph graph in the bundled agent-langchain.mjs. The process gets
+ * PATH/HOME/TMPDIR and the person's declared model credential(s) only (Anthropic or OpenAI key). The route's provider,
+ * model and base URL go in the init message; the key never does.
+ */
+export const langchain: HarnessAdapter = {
+  id: "langchain",
+  title: "LangChain agent",
+  processEnv(route, host) {
+    const secrets = checked(route.secretEnv, MODEL_SECRET_NAMES, "secret");
+    if (!secrets.ANTHROPIC_API_KEY && route.apiKey && route.provider !== "openai") secrets.ANTHROPIC_API_KEY = route.apiKey;
+    return { PATH: "/usr/bin:/bin", HOME: host.HOME ?? "", TMPDIR: host.TMPDIR ?? "/tmp", ...secrets };
+  },
+  initModel(route) {
+    const env = checked(route.env, MODEL_PLAIN_NAMES, "provider");
+    const secretNames = Object.keys(checked(route.secretEnv, MODEL_SECRET_NAMES, "secret"));
+    return {
+      model: route.model, ...(route.provider ? { provider: route.provider } : {}), baseUrl: route.baseUrl,
+      ...(Object.keys(env).length ? { env } : {}), ...(secretNames.length ? { secretNames } : {}),
+    };
+  },
+  entry: (resourcesDir) => join(resourcesDir, "agent-langchain.mjs"),
+};
+
+export const HARNESSES: Record<string, HarnessAdapter> = { [claudeAgentSdk.id]: claudeAgentSdk, [langchain.id]: langchain };
 
 /** The adapter for a route; a harness that is not built yet is a plain sentence for Chat. */
 export function harnessFor(route: AgentRoute): HarnessAdapter {
@@ -155,7 +184,7 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
     const env = harness.processEnv(route, process.env);
     // A provider error can quote the key; nothing the agent sends back may carry it into Chat or the helper log.
     secretValues = Object.entries(env).filter(([name]) => MODEL_SECRET_NAMES.has(name)).map(([, value]) => value);
-    const proc = (deps.spawnProcess ?? spawn)(deps.node, [deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
+    const proc = (deps.spawnProcess ?? spawn)(deps.node, [harness.entry?.(dirname(deps.entry)) ?? deps.entry], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     child = proc;
     proc.stderr.on("data", () => { /* agent logs stay local; never forwarded with content */ });
     const ready = new Promise<void>((resolve, reject) => {

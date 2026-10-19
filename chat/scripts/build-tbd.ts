@@ -20,6 +20,12 @@ await build({
   banner: { js: "import { createRequire as __tbdRequire } from 'node:module'; const require = __tbdRequire(import.meta.url);" },
   logLevel: 'error',
 });
+// TBD's LangChain agent (WP-HARNESS L1): same protocol, a small LangGraph graph; same esbuild options as agent.mjs.
+await build({
+  entryPoints: ['src/agent/harness/langchain.ts'], outfile: 'out/tbd/agent-langchain.mjs', bundle: true, platform: 'node', format: 'esm', target: 'node24',
+  banner: { js: "import { createRequire as __tbdRequire } from 'node:module'; const require = __tbdRequire(import.meta.url);" },
+  logLevel: 'error',
+});
 // The local relay (C5): the agent's `tealbrick` MCP server, from @opt2-tealbrick/bridge.
 await build({
   entryPoints: ['src/agent/relay.ts'], outfile: 'out/tbd/relay.mjs', bundle: true, platform: 'node', format: 'esm', target: 'node24',

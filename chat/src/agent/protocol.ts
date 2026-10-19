@@ -16,7 +16,9 @@ export const ASK_TOOL = "AskUserQuestion";
 export interface AgentModel {
   /** Model id, e.g. from the "agent" route in Settings → Models. */
   model: string;
-  /** Anthropic API base URL (default https://api.anthropic.com). */
+  /** Model provider for harnesses that support more than one (LangChain); absent = "anthropic". */
+  provider?: "anthropic" | "openai";
+  /** Model API base URL (default: the provider's own). Anthropic-compatible for "anthropic", OpenAI-compatible for "openai". */
   baseUrl?: string;
   /** Cloud provider settings (Bedrock, Vertex AI, Foundry; model pins), names from the fixed list in agent/modelEnv.ts only. */
   env?: Record<string, string>;
