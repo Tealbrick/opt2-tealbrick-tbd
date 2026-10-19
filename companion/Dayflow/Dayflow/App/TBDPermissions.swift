@@ -79,12 +79,28 @@ final class TBDPermissions: ObservableObject {
 
 struct TBDPermissionsView: View {
   @ObservedObject private var permissions = TBDPermissions.shared
+  @ObservedObject private var appState = AppState.shared
+
+  /// TBD-DEV7-1: permission granted but capture off (the state dev.7's setup left behind) must be visible and fixable here.
+  @ViewBuilder private var captureRow: some View {
+    if permissions.screen == "Allowed" && !appState.isRecording {
+      HStack(spacing: TBDKit.s3) {
+        Text("Screen capture is off. Companion records nothing until you start it.")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.brickInk)
+        Spacer(minLength: TBDKit.s3)
+        Button("Start capture") { AppState.shared.setRecording(true, analyticsReason: "access_pane") }
+          .buttonStyle(TBDButtonStyle(.primary))
+      }
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: TBDKit.s5) {
       Text("Access is granted to TBD on this Mac and shared across its features. Portal sign-in does not grant or revoke these permissions.")
         .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
       row("Microphone", permissions.microphone, "Chat dictation, Listen and microphone meetings.")
-      row("Screen recording", permissions.screen, "Companion screenshots and meetings that capture system audio. macOS may require a restart after approval.")
+      row("Screen recording", permissions.screen, "Companion screenshots and meetings that capture system audio. macOS lists this app as TBD; an older TBD in that list is a different app (the archived v1). After you allow it, quit TBD with Cmd-Q and open it again.")
+      captureRow
       row("Accessibility", permissions.accessibility, "Global dictation insertion and desktop interactions.")
       row("Notifications", permissions.notifications, "Reminders, nudges and completion alerts.")
       row("Calendar", permissions.calendar, "Optional meeting calendar integration. Request access when enabling that feature.")

@@ -53,10 +53,26 @@ struct TBDCompanionSetup: View {
     ]
   }
 
+  /// Ends setup. Capture is ON when Screen Recording is granted ("set and forget", C280 C14, TBD-DEV7-1); without the
+  /// grant it stays off WITHOUT saving "off", so it starts by itself at the next launch once macOS has the grant.
   private func openCompanion() {
-    UserDefaults.standard.set(false, forKey: "isRecording")
     AppState.shared.enablePersistence()
-    AppState.shared.setRecording(false)
+    Self.finishSetup(
+      screenRecordingGranted: ScreenRecordingPermissionNotice.isGranted,
+      setRecording: { on, persist in AppState.shared.setRecording(on, persistPreference: persist) },
+      postNotice: { ScreenRecordingPermissionNotice.post(reason: "setup_without_screen_recording") })
     completed = true
+  }
+
+  /// The setup's last step, as a rule (tested): granted → capture on and saved; not granted → off, NOT saved, notice.
+  static func finishSetup(
+    screenRecordingGranted: Bool, setRecording: (_ on: Bool, _ persist: Bool) -> Void, postNotice: () -> Void
+  ) {
+    if screenRecordingGranted {
+      setRecording(true, true)
+    } else {
+      setRecording(false, false)
+      postNotice()
+    }
   }
 }

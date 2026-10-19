@@ -73,6 +73,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Only attempt to start recording if we're past the screen step or fully onboarded.
     if didOnboard {
+      // TBD-DEV7-1: once, drop the "capture off" that dev.7's setup saved (AppState.migrateRecordingDefaultIfNeeded).
+      AppState.migrateRecordingDefaultIfNeeded()
       // Onboarding complete - enable persistence and restore user preference
       AppState.shared.enablePersistence()
 
