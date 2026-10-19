@@ -4,7 +4,7 @@ import XCTest
 /// TBD-UX-01: one Settings item per pane, and every section a link or older build sends still opens its pane.
 final class SettingsRouteTests: XCTestCase {
     func testEverySectionOpensAPane() {
-        XCTAssertEqual(TBDSettingsRoute.sections.count, 13)
+        XCTAssertEqual(TBDSettingsRoute.sections.count, 14)
         for section in TBDSettingsRoute.sections {
             XCTAssertNotNil(TBDSettingsRoute.item(for: section), section)
         }
@@ -37,6 +37,12 @@ final class SettingsRouteTests: XCTestCase {
             XCTAssertTrue(TBDSettingsRoute.sections.contains(item.section), item.rawValue)
             XCTAssertEqual(TBDSettingsRoute.item(for: item.section), item)
         }
+    }
+
+    func testConnectorsIsAPaneOfTheAppGroupAfterAccess() {
+        XCTAssertEqual(TBDSettingsRoute.item(for: "connectors"), .connectors)
+        XCTAssertEqual(TBDSettingsRoute.groups.first?.items, [.account, .models, .permissions, .connectors, .other, .about])
+        XCTAssertNil(TBDSettingsRoute.modelsPage(for: "connectors"))
     }
 
     func testAnUnknownSectionIsNotAPane() {

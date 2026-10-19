@@ -121,6 +121,8 @@
 
       // Agents (WP-WALL): seeded rosters, frozen wall, no helper call.
       let wall = AgentWallShotsSeed.stores()
+      // Connectors (C11): seeded states, frozen stores, no helper call and no Portal.
+      let connectors = ConnectorsShotsSeed.states()
 
       let main = CGSize(width: 1280, height: 800)
       let wide = CGSize(width: 1600, height: 1000)
@@ -140,9 +142,21 @@
             size: main, dark: dark, name: "timeline-review-\(theme)")
         }
         for tab in settingsTabs {
-          try render(SettingsView(initialSection: tab).padding(15), size: main, dark: dark, name: "settings-\(tab)-\(theme)")
+          // Connectors: the seeded "accounts" state (mixed access and remembered choices), never the live store.
+          let seeded = tab == "connectors" ? connectors.first : nil
+          try render(
+            SettingsView(initialSection: tab, connectors: seeded?.1, connectorsPortal: ConnectorsShotsSeed.portal).padding(15),
+            size: main, dark: dark, name: "settings-\(tab)-\(theme)")
           // A larger window too: Settings must use the width it is given (TBD-UX-01).
-          try render(SettingsView(initialSection: tab).padding(15), size: wide, dark: dark, name: "settings-\(tab)-1600-\(theme)")
+          try render(
+            SettingsView(initialSection: tab, connectors: seeded?.1, connectorsPortal: ConnectorsShotsSeed.portal).padding(15),
+            size: wide, dark: dark, name: "settings-\(tab)-1600-\(theme)")
+        }
+        // Connectors: the other states (empty, Read only, locked, install, not connected, no grant, failed).
+        for (name, store) in connectors.dropFirst() {
+          try render(
+            SettingsView(initialSection: "connectors", connectors: store, connectorsPortal: ConnectorsShotsSeed.portal).padding(15),
+            size: main, dark: dark, name: "connectors-\(name)-\(theme)")
         }
         try render(TBDCompanionSetup(), size: main, dark: dark, name: "setup-\(theme)")
         // WP-ONB: the built first-launch flow, every step and the summary in two states (C286 mockups).
@@ -305,6 +319,56 @@
     /// Never asked: a frozen store makes no call. If it were, the shots would show it as a failure.
     private struct SeededClient: AgentWallRosterClient {
       func listAgents() async throws -> Any { throw CocoaError(.userCancelled) }
+    }
+  }
+
+  // MARK: - Connectors shots
+
+  /// The states of the Connectors shots. Seeded and frozen: the stores never ask the helper, and every name is made up.
+  @MainActor
+  enum ConnectorsShotsSeed {
+    /// A Portal address and workspace that exist only here, so the link buttons are enabled in the shots.
+    static let portal = ConnectorsPortal(issuer: { "https://portal.example" }, workspace: { "ws_demo" })
+
+    static let mixed: [TBDConnectorAccount] = [
+      TBDConnectorAccount(id: "a1", label: "Work inbox", service: "gmail", kind: .asMe, access: .readUpdate),
+      TBDConnectorAccount(id: "a2", label: "Team calendar", service: "googlecalendar", kind: .asMe, access: .read),
+      TBDConnectorAccount(id: "a3", label: "Studio Slack", service: "slack", kind: .asItself, access: .readUpdateDelete),
+      TBDConnectorAccount(id: "a4", label: "Company GitHub", service: "github", kind: .asItself, access: .read),
+    ]
+    static let choices: [TBDConnectorChoice] = [
+      TBDConnectorChoice(account: "Work inbox", tool: "GMAIL_SEND_EMAIL", decision: .always),
+      TBDConnectorChoice(account: "Studio Slack", tool: "SLACK_DELETE_MESSAGE", decision: .never),
+      TBDConnectorChoice(account: "default", tool: "GOOGLECALENDAR_CREATE_EVENT", decision: .always),
+    ]
+
+    /// The first entry is the pane as the Settings shots show it; the others are the extra states.
+    static func states() -> [(String, ConnectorsStore)] {
+      func store(_ state: ConnectorsState) -> ConnectorsStore {
+        let store = ConnectorsStore(client: SeededClient(), account: { AgentWallAccountKey(signedIn: true) }, isAppActive: { false })
+        store.seed(state)
+        return store
+      }
+      let active = ConnectorsState(gate: .active, accounts: mixed, choices: choices, loaded: true)
+      return [
+        ("accounts", store(active)),
+        ("empty", store(ConnectorsState(gate: .active, loaded: true))),
+        ("readonly", store(ConnectorsState(gate: .active, accounts: mixed.filter { $0.access == .read }, loaded: true))),
+        ("locked", store(ConnectorsState(gate: .locked, loaded: true))),
+        ("install", store(ConnectorsState(gate: .install, loaded: true))),
+        ("notconnected", store(ConnectorsState(gate: .notConnected, loaded: true))),
+        ("nogrant", store(ConnectorsState(gate: .noGrant("TBD's agent has no Connect access. In Portal, open your workspace, draw a line from TBD's agent to Connect, choose Read, then press Connect. Then open Connect and share an account with TBD's agent."), loaded: true))),
+        ("failed", store(ConnectorsState(gate: .active, accounts: mixed, choices: choices, notice: "Connect did not answer in time. Try again.", loaded: true))),
+      ]
+    }
+
+    /// Never asked: a frozen store makes no call.
+    private struct SeededClient: ConnectorsClient {
+      func access() async -> TBDAppAccess { .unknown }
+      func agentConnected() async -> Bool { false }
+      func accounts() async throws -> TBDConnectorAccounts { throw CocoaError(.userCancelled) }
+      func choices() async throws -> [TBDConnectorChoice] { throw CocoaError(.userCancelled) }
+      func revoke(account: String, tool: String) async throws -> [TBDConnectorChoice] { throw CocoaError(.userCancelled) }
     }
   }
 

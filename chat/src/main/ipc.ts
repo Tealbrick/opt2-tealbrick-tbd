@@ -11,7 +11,7 @@ import { connectMcp } from "@opt2-tealbrick/bridge";
 import { knowledgeSave, type KnowledgeSaveInput } from "./knowledgeSave";
 import { flowTaskBoardComplete, flowTaskBoardList } from "./flowTaskBoard";
 import { connectAccounts } from "./connectAccounts";
-import { holdLink } from "./connectHold";
+import { holdLink, holdProduct } from "./connectHold";
 import { dialog } from "../tbd/host";
 import { publicPersonSession } from "./portal";
 import { DEFAULT_AGENT_ID } from "./defaultAgent";
@@ -306,14 +306,14 @@ export function registerIpc(): void {
   const turns = createTurnRouter({
     agent: () => getServices().agent,
     emit: (streamId, channel, payload) => { if (sendTo && !sendTo.isDestroyed()) sendTo.send(channel, { streamId, ...payload }); },
-    // "Open approval" for a held Connect call (C4): Inbox's holds overview when Operator Inbox is unlocked in the workspace the
-    // agent is connected to, else Connect's own hold page. A Portal launcher link; it opens in the system browser.
+    // "Open approval" for a held call of any app (C4): Inbox's holds overview when Operator Inbox is unlocked in the workspace the
+    // agent is connected to, else the hold page of the app that holds the call (the product in the tool name). A Portal launcher link; it opens in the system browser.
     holdUrl: (held) => {
       const c = getServices().agentIdentity.connection();
       if (!c) return null;
       const snapshot = getServices().entitlements.current();
       const inboxUnlocked = snapshot.ws === c.workspaceId && snapshot.apps.inbox.access === "unlocked";
-      return holdLink({ issuer: currentControlPlane().issuer, ws: c.workspaceId, holdId: held.holdId, inboxUnlocked });
+      return holdLink({ issuer: currentControlPlane().issuer, ws: c.workspaceId, holdId: held.holdId, inboxUnlocked, product: holdProduct(held.tool) });
     },
   });
 

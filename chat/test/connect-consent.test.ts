@@ -10,7 +10,7 @@ import {
   ALWAYS_HINT, CARD_CONTENT_MAX, CONNECT_READ_OPS, NEVER_MESSAGE, buildConnectCard, callFingerprint, classifyConnect, connectOp, createConnectConsent, createConsentStore,
   createEffectCache, decideConnectCall, heldOfResult, searchedEffects, workspaceKey, type ConnectCard,
 } from "../src/main/connectConsent.ts";
-import { holdLink } from "../src/main/connectHold.ts";
+import { holdLink, holdProduct } from "../src/main/connectHold.ts";
 import { needsPermission, type AgentToHelper, type ConnectAsk } from "../src/agent/protocol.ts";
 import { createInteractions, createToolSeam } from "../src/agent/harness/langchainTools.ts";
 
@@ -384,6 +384,19 @@ describe("hold links", () => {
   });
   test("ids are encoded", () => {
     assert.equal(holdLink({ issuer: "https://p.example", ws: "w s", holdId: "h/1?x", inboxUnlocked: false }), "https://p.example/w/w%20s/open?product=connect&path=/holds/h%2F1%3Fx");
+  });
+  test("the hold page is the page of the app that holds the call (the product in the tool name)", () => {
+    assert.equal(holdProduct("mcp__tealbrick__knowledge__document_create"), "knowledge");
+    assert.equal(holdProduct("mcp__tealbrick__kanban__issue_complete"), "kanban");
+    assert.equal(holdProduct("mcp__tealbrick__connect__tools_call"), "connect");
+    assert.equal(holdProduct("connect__tools_call"), "connect");
+    assert.equal(holdProduct("Bash"), null);
+    assert.equal(holdProduct("mcp__tealbrick__"), null);
+    assert.equal(holdProduct("mcp__tealbrick__../x__y"), null, "not a product id");
+    const base = { issuer: "https://p.example", ws: "ws_1", holdId: "hold_3", inboxUnlocked: false };
+    assert.equal(holdLink({ ...base, product: holdProduct("mcp__tealbrick__knowledge__document_create") }), "https://p.example/w/ws_1/open?product=knowledge&path=/holds/hold_3");
+    assert.equal(holdLink({ ...base, product: null }), "https://p.example/w/ws_1/open?product=connect&path=/holds/hold_3", "no product: Connect's page");
+    assert.equal(holdLink({ ...base, inboxUnlocked: true, product: "knowledge" }), "https://p.example/w/ws_1/open?product=inbox&path=/holds", "Inbox wins when unlocked");
   });
 });
 

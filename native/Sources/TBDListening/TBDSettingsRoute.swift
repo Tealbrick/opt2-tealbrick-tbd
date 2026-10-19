@@ -6,7 +6,7 @@ import Foundation
 public enum TBDSettingsRoute {
     /// One side-nav item, in the order shown.
     public enum Item: String, CaseIterable, Sendable {
-        case account, models, permissions, other, about
+        case account, models, permissions, connectors, other, about
         case privacy, storage, aiTools, data
         case capture, audioSystem
 
@@ -15,6 +15,7 @@ public enum TBDSettingsRoute {
             case .account: return "Account"
             case .models: return "Models"
             case .permissions: return "Access"
+            case .connectors: return "Connectors"
             case .other: return "General"
             case .about: return "About"
             case .privacy: return "Screen capture"
@@ -32,6 +33,7 @@ public enum TBDSettingsRoute {
             case .account: return "Your Teal Brick Portal sign-in and workspace."
             case .models: return "The models TBD uses for its agent, summaries, cleanup and screen analysis."
             case .permissions: return "The macOS permissions TBD needs."
+            case .connectors: return "The accounts TBD's agent may use through Connect, and your choices for it."
             case .other: return "Language, appearance and how TBD starts."
             case .about: return "Version, updates and licences."
             case .privacy: return "Choose apps TBD should hide from screenshots."
@@ -49,14 +51,14 @@ public enum TBDSettingsRoute {
 
     /// Side-nav groups: the app first, then TBD's capture aspects (C142).
     public static let groups: [(title: String, items: [Item])] = [
-        ("App", [.account, .models, .permissions, .other, .about]),
+        ("App", [.account, .models, .permissions, .connectors, .other, .about]),
         ("Companion", [.privacy, .storage, .aiTools, .data]),
         ("Listen", [.capture, .audioSystem]),
     ]
 
     /// Every section name the host accepts (deep links, notifications, the menu bar, design shots).
     public static let sections = [
-        "account", "about", "permissions", "storage", "privacy", "providers", "aiTools", "data", "other",
+        "account", "about", "permissions", "connectors", "storage", "privacy", "providers", "aiTools", "data", "other",
         "capture", "engine", "audioAI", "audioSystem",
     ]
 

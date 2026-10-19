@@ -16,6 +16,7 @@ struct SettingsView: View {
   private enum SettingsTab: String, CaseIterable, Identifiable {
     case account, about
     case permissions
+    case connectors
     case storage
     case privacy
     case providers
@@ -31,6 +32,7 @@ struct SettingsView: View {
       case .about: return "info.circle"
       case .account: return "person.crop.circle"
       case .permissions: return "lock.shield"
+      case .connectors: return "link"
       case .storage: return "internaldrive"
       case .privacy: return "eye.slash"
       case .aiTools: return "wrench.and.screwdriver"
@@ -44,7 +46,12 @@ struct SettingsView: View {
   }
 
   @State private var selectedTab: SettingsTab
-  init(initialSection: String = "account") {
+  /// The Connectors pane's store; design shots pass a seeded one.
+  private let connectorsStore: ConnectorsStore?
+  private let connectorsPortal: ConnectorsPortal
+  init(initialSection: String = "account", connectors: ConnectorsStore? = nil, connectorsPortal: ConnectorsPortal = .live) {
+    self.connectorsStore = connectors
+    self.connectorsPortal = connectorsPortal
     _selectedTab = State(initialValue: SettingsTab(rawValue: initialSection) ?? .account)
     #if DEBUG
       // The pane enum and the shared route table must name the same sections (design shots run DEBUG).
@@ -259,6 +266,8 @@ struct SettingsView: View {
         SettingsAccountSection()
       case .permissions:
         TBDPermissionsView()
+      case .connectors:
+        SettingsConnectorsTabView(store: connectorsStore, portal: connectorsPortal)
       case .storage:
         SettingsStorageTabView(viewModel: storageViewModel)
       case .privacy:

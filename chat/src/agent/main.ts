@@ -147,12 +147,13 @@ function connectHooks(id: string, existing: NonNullable<Options["hooks"]>): NonN
     PostToolUse: [
       ...post,
       {
-        matcher: `${BRIDGE_TOOL_PATTERN}connect__.*`,
+        matcher: `${BRIDGE_TOOL_PATTERN}.*`,
         hooks: [async (hook) => {
           if (hook.hook_event_name !== "PostToolUse") return {};
-          connect.observe(hook.tool_name, hook.tool_input, hook.tool_response);
+          connect.observe(hook.tool_name, hook.tool_input, hook.tool_response); // Connect tools only; others return at once
           // The SDK hands MCP results to hooks as the JSON text of the structured content, so the harness's own held hook
-          // (which needs `.structuredContent`) does not fire here: the Connect hold is read from the text.
+          // (which needs `.structuredContent`) does not fire here, for any app: the hold is read from the text, for every
+          // tool of the workspace bridge (`mcp__tealbrick__<app>__…`).
           const held = heldOfResult(hook.tool_response);
           if (held) {
             out({ type: "event", id, event: { kind: "activity", label: "Waiting for owner approval" } });

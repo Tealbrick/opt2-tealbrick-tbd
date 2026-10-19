@@ -183,3 +183,26 @@ for (const harnessCase of HARNESSES) {
     assert.match(run.heldSeen[0].tool, /connect__tools_call$/);
   });
 }
+
+// Holds of apps other than Connect (the generic held label): the hook of the Agent SDK reads the hold from the tool_response
+// text, so the "Waiting for owner approval" notice shows for every app, not only Connect. Knowledge stands for them all.
+const DOC: ModelStep = { name: "mcp__tealbrick__knowledge__document_create", input: { title: "Notes" } };
+
+test("holds (Agent SDK): a held call of a non-Connect app (Knowledge) reaches the Chat without a Connect card", { skip: sdkSkip, timeout: 180_000 }, async () => {
+  const run = await runSdk([DOC, DOC], [], "held-knowledge");
+  assert.equal(run.cards.length, 0, "no Connect card for a non-Connect tool");
+  assert.deepEqual(run.heldSeen.map((h) => [h.holdId, h.tool]), [["hold_know_1", "mcp__tealbrick__knowledge__document_create"]]);
+  assert.equal(run.calls.filter((c) => c.name === "knowledge__document_create").length, 2, "the repeat after approval is not blocked");
+  assert.equal(run.result.reply, "Done.");
+});
+
+test("holds (Agent SDK): a call that is not held shows no notice", { skip: sdkSkip, timeout: 180_000 }, async () => {
+  const run = await runSdk([DOC], []);
+  assert.deepEqual(run.heldSeen, []);
+});
+
+test("holds (LangChain): unchanged — the Connect hold still reaches the Chat", { skip: lcSkip, timeout: 180_000 }, async () => {
+  const run = await runLangChain([SEARCH, SEND, SEND], ["approve"], "held-first");
+  assert.deepEqual(run.heldSeen.map((h) => h.holdId), ["hold_fake_1"]);
+  assert.match(run.heldSeen[0].tool, /connect__tools_call$/);
+});
