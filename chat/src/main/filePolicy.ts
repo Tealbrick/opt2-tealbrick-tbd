@@ -24,8 +24,11 @@ export interface PolicyContext {
   allowed: readonly string[];
   /** TBD's own data folder (denied except the workspace inside it). */
   tbdData: string;
-  /** The archived v1 TBD folders (C284: reference only): always denied, no exception. */
-  archived?: readonly string[];
+  /**
+   * Always denied, no exception (C284): the archived v1 TBD folders, the other identity's folders (live vs TBD Dev)
+   * and the signer socket's folder.
+   */
+  alwaysDenied?: readonly string[];
 }
 
 const SECRET_DIRS = [
@@ -55,11 +58,16 @@ export function realPath(p: string): string {
   try { return join(realpathSync(cur), ...rest); } catch { return p; }
 }
 
-export const within = (p: string, root: string): boolean => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep);
+/** macOS file systems are case-insensitive by default: "…/tbd" is "…/TBD". Compare folded there. */
+const fold = (p: string): string => (process.platform === "darwin" ? p.toLowerCase() : p);
+export const within = (p: string, root: string): boolean => {
+  const a = fold(p), r = fold(root);
+  return a === r || a.startsWith(r.endsWith(sep) ? r : r + sep);
+};
 
 export function isSecret(path: string, ctx: PolicyContext): string | null {
   if (within(path, ctx.tbdData) && !within(path, ctx.workspace)) return "TBD's own data";
-  for (const a of ctx.archived ?? []) if (within(path, a)) return "the archived v1 TBD data";
+  for (const a of ctx.alwaysDenied ?? []) if (within(path, a)) return "data TBD's agent must not use";
   for (const d of SECRET_DIRS) if (within(path, join(ctx.home, d))) return d;
   for (const f of SECRET_FILES) if (path === join(ctx.home, f)) return f;
   for (const part of path.split(sep)) for (const re of SECRET_NAMES) if (re.test(part)) return part;
@@ -84,12 +92,24 @@ export function targetPaths(tool: string, input: Record<string, unknown>, ctx: P
   return out;
 }
 
+/**
+ * True when `text` names `path` itself or something inside it: the match must end at a path boundary, so
+ * ".../com.tealbrick.desktop" does not match ".../com.tealbrick.desktop-agent/..." (a different folder).
+ */
+function mentionsPath(text: string, path: string): boolean {
+  for (let i = text.indexOf(path); i >= 0; i = text.indexOf(path, i + 1)) {
+    const next = text[i + path.length];
+    if (next === undefined || next === "/" || /[\s'"`;|&()<>]/.test(next)) return true;
+  }
+  return false;
+}
+
 /** Paths a shell command names (best effort, for the deny list only). */
 export function commandMentionsSecret(command: string, ctx: PolicyContext): string | null {
   // Whole protected paths, also when they contain spaces (quoted or escaped).
-  const flat = command.replace(/\\ /g, " ");
-  for (const d of [ctx.tbdData, ...(ctx.archived ?? []), ...SECRET_DIRS.map((x) => join(ctx.home, x)), ...SECRET_FILES.map((x) => join(ctx.home, x))]) {
-    if (flat.includes(d) || flat.includes(d.replace(ctx.home, "~")) || flat.includes(d.replace(ctx.home, "$HOME"))) return d.replace(ctx.home, "~");
+  const flat = fold(command.replace(/\\ /g, " "));
+  for (const d of [ctx.tbdData, ...(ctx.alwaysDenied ?? []), ...SECRET_DIRS.map((x) => join(ctx.home, x)), ...SECRET_FILES.map((x) => join(ctx.home, x))]) {
+    if ([d, d.replace(ctx.home, "~"), d.replace(ctx.home, "$HOME")].some((form) => mentionsPath(flat, fold(form)))) return d.replace(ctx.home, "~");
   }
   for (const token of command.split(/[\s'"=;|&<>()]+/)) {
     if (!token || !(token.startsWith("/") || token.startsWith("~") || token.includes("/") || token.startsWith("."))) continue;
@@ -129,7 +149,7 @@ export function sandboxSettings(ctx: PolicyContext): Record<string, unknown> {
     allowUnsandboxedCommands: false,
     filesystem: {
       allowWrite: [ctx.workspace, ...ctx.allowed],
-      denyRead: [...SECRET_DIRS.map((d) => join(ctx.home, d)), ...SECRET_FILES.map((f) => join(ctx.home, f)), ctx.tbdData, ...(ctx.archived ?? [])],
+      denyRead: [...SECRET_DIRS.map((d) => join(ctx.home, d)), ...SECRET_FILES.map((f) => join(ctx.home, f)), ctx.tbdData, ...(ctx.alwaysDenied ?? [])],
     },
   };
 }

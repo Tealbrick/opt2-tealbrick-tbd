@@ -129,8 +129,10 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     for key in ["TMPDIR", "LANG", "LC_ALL", "TBD_PORTAL_URL", "TBD_CHAT_DEBUG_STREAM"] { if let v = inherited[key] { env[key] = v } }
     // Paths the default agent needs: its bundle and the harness-local tool CLIs (C5).
     env["TBD_RESOURCES"] = resources.appendingPathComponent("Chat").path
-    // TBD's agent works in the app's own folder (C284: never the archived v1 "TBD Agent" folder).
-    env["TBD_AGENT_WORKSPACE"] = data.deletingLastPathComponent().appendingPathComponent("Agent/Workspace").path
+    // TBD's agent works NEXT to the app's data ("<dataFolder>-agent"; chat/src/main/appIdentity.ts agentFolder), never
+    // inside it, so the data folder stays fully denied to the agent's sandbox; never the archived v1 agent folder (C284).
+    env["TBD_AGENT_WORKSPACE"] = data.deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent(TBDIdentity.dataFolder + "-agent/Workspace").path
     if let helpers = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers") as URL? {
       env["TBD_COMPANION_CLI"] = helpers.appendingPathComponent("dayflow").path
       env["TBD_LISTENING_CLI"] = helpers.appendingPathComponent("tbd-listen").path

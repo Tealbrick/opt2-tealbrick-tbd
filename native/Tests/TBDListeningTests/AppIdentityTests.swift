@@ -63,7 +63,9 @@ final class AppIdentityTests: XCTestCase {
                       !allowed.contains(url.lastPathComponent),
                       let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
                 scanned += 1
-                for marker in ["com.tealbrick.tbd", "tealbrick-tbd:", "\"tealbrick-tbd\"", "Application Support/TBD/", "\"TBD/Companion"]
+                for marker in ["com.tealbrick.tbd", "tealbrick-tbd:", "\"tealbrick-tbd\"", "Application Support/TBD/", "\"TBD/Companion",
+                               "folder(\"TBD\")", "folder(\"Dayflow\")", "\"TBD Agent\"", "Logs/TBD/", "Documents/TBD/",
+                               "\"tealbrick.person\"", "\"tealbrick.agent\"", "`tealbrick.person`", "Support/Dayflow/"]
                 where text.contains(marker) {
                     hits.append("\(url.path.replacingOccurrences(of: repo.path + "/", with: "")): \(marker)")
                 }

@@ -5,9 +5,9 @@ import TBDModels
 
 /// TBD's AGENT key (K4, CREDENTIALS §9, §12 b): an Ed25519 key pair whose private
 /// half never leaves this process. It lives in the Keychain (this device only,
-/// when unlocked) as item `tealbrick.agent.<label>` (account `k4`); after Portal
+/// when unlocked) as item `com.tealbrick.desktop.agent.<label>` (account `k4`); after Portal
 /// approves the connection the label becomes the connection id, so the item is
-/// `tealbrick.agent.<con>` as the spec names it. The Chat helper can ask for the public JWK and for
+/// `com.tealbrick.desktop.agent.<con>` (the spec's `tealbrick.agent.<con>` under TBD v2's own prefix, C284). The Chat helper can ask for the public JWK and for
 /// signatures over agent assertions; it never receives the private key.
 enum TBDAgentKeys {
   static let servicePrefix = TBDIdentity.keychainService("agent") + "."

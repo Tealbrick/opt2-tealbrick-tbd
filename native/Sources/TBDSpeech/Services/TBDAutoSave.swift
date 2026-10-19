@@ -74,7 +74,7 @@ public struct TBDAutoSaveConfig: @unchecked Sendable {
         return true
     }
 
-    /// `~/Documents/TBD/Listening/Transcriptions` or `.../Meetings`.
+    /// `~/Documents/TBD Desktop/Listening/Transcriptions` or `.../Meetings` (TBDIdentity.documentsFolder).
     public static func defaultFolder(for scope: TBDAutoSaveScope) -> URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")

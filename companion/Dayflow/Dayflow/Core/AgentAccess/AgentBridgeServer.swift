@@ -6,8 +6,9 @@
 //  its MCP server) read the database directly, but writes come here, because
 //  the app owns the category store and its UI must refresh when data changes.
 //
-//  Transport: a Unix domain socket at ~/Library/Application Support/Dayflow/
-//  agent.sock, mode 0600. One JSON request line per connection, one JSON
+//  Transport: a Unix domain socket at ~/Library/Application Support/
+//  com.tealbrick.desktop/Companion/agent.sock (82 bytes for a 4-letter user name;
+//  the 104-byte limit allows user names up to ~26 characters), mode 0600. One JSON request line per connection, one JSON
 //  response line back. The server only runs while "Allow edits" is on.
 //  Settings > Tools starts and stops it live, and process() re-checks the
 //  flag on every request.

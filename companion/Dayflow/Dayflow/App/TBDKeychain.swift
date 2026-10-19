@@ -4,10 +4,10 @@ import Security
 import TBDModels
 
 /// Keychain items with the names CREDENTIALS §12 fixes:
-/// - `tealbrick.person` (account = Portal origin): the person's owner native session (K3).
+/// - `com.tealbrick.desktop.person` (account = Portal origin): the person's owner native session (K3).
 ///   Stored with user presence (Touch ID or the login password) when macOS supports it for
 ///   this app (data-protection keychain); otherwise this device only, when unlocked.
-/// - `tealbrick.agent.<con>` (account `k4`): TBD's agent key (see TBDAgentKeys). No user
+/// - `com.tealbrick.desktop.agent.<con>` (account `k4`): TBD's agent key (see TBDAgentKeys). No user
 ///   presence: the agent signs short assertions unattended in the background.
 enum TBDKeychain {
   struct Failure: LocalizedError {

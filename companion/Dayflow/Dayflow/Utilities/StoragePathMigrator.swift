@@ -40,7 +40,7 @@ enum StoragePathMigrator {
       return
     }
 
-    let destinationBase = newSupport.appendingPathComponent(TBDIdentity.folder("TBD") + "/Companion", isDirectory: true)
+    let destinationBase = newSupport.appendingPathComponent(TBDIdentity.dataFolder + "/Companion", isDirectory: true)
 
     let normalizedLegacy = legacyBase.standardizedFileURL.path
     let normalizedDestination = destinationBase.standardizedFileURL.path

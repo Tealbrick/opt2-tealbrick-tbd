@@ -54,7 +54,7 @@
       exit(code)
     }
 
-    /// A fresh demo data root for this run only (Application Support/TBD-dev-shots, Dayflow-dev-shots).
+    /// A fresh demo data root for this run only (Application Support/com.tealbrick.desktop-dev-shots).
     private static func prepareDemoRoots() throws -> [URL] {
       let fm = FileManager.default
       let roots = [TBDIdentity.applicationSupport()]

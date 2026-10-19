@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { APP_DATA_FOLDER, ARCHIVED_V1_FOLDERS, appSupport } from "./appIdentity";
+import { basename, dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { APP_DATA_FOLDER, ARCHIVED_V1_DEV_FOLDERS, ARCHIVED_V1_FOLDERS, agentFolder, appSupport, identityFolders } from "./appIdentity";
 import { saveAttachmentIn } from "./attachmentFile";
 import { app, nativeCall } from "../tbd/host";
 import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
@@ -27,7 +29,7 @@ function dataDir(): string {
 }
 
 /**
- * Person session (K3) in the Keychain item `tealbrick.person` (CREDENTIALS §12), one account per
+ * Person session (K3) in the Keychain item `com.tealbrick.desktop.person` (CREDENTIALS §12 name under TBD v2's prefix), one account per
  * Portal origin. Loaded once into memory (`loadPersonSession`, may ask for user presence) and
  * written through to the Keychain by the native host. Never on disk in a file.
  */
@@ -82,8 +84,8 @@ export const keychainSigner: AgentSigner = {
 /** The agent's own working folder (SEC-04): TBD-owned, outside TBD's data, created 0700. */
 export function agentWorkspace(): string {
   // TBD_AGENT_WORKSPACE is set only by the DEBUG dev host (TBD Dev); the live app never sets it.
-  // The host sets TBD_AGENT_WORKSPACE (<app data>/Agent/Workspace, C284); the fallback is the same live location.
-  const dir = process.env.TBD_AGENT_WORKSPACE || join(appSupport(), APP_DATA_FOLDER, "Agent", "Workspace");
+  // The host sets TBD_AGENT_WORKSPACE (<app data> Agent/Workspace, next to the data; C284); the fallback is the live one.
+  const dir = process.env.TBD_AGENT_WORKSPACE || join(appSupport(), agentFolder(APP_DATA_FOLDER), "Workspace");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return realPath(dir);
 }
@@ -103,14 +105,17 @@ function saveFolders(list: string[]): void {
 }
 export function policyContext(): PolicyContext {
   const home = realPath(homedir());
-  // TBD's own data = the parent of TBD_CHAT_DATA (<app data>/Chat); the archived v1 folders are denied too (C284).
+  // TBD's own data = the parent of TBD_CHAT_DATA (<app data>/Chat). Always denied too (C284): the archived v1 folders,
+  // the other TBD v2 identity's folders (live vs TBD Dev) and the signer socket's folder.
   const data = process.env.TBD_CHAT_DATA ? dirname(process.env.TBD_CHAT_DATA) : join(appSupport(), APP_DATA_FOLDER);
+  const own = new Set([basename(data), agentFolder(basename(data))]);
+  const others = [...ARCHIVED_V1_FOLDERS, ...ARCHIVED_V1_DEV_FOLDERS, ...identityFolders().filter((f) => !own.has(f))];
   return {
     home,
     workspace: agentWorkspace(),
     allowed: agentFolders().map((f) => realPath(f)),
     tbdData: realPath(data),
-    archived: ARCHIVED_V1_FOLDERS.map((f) => realPath(join(appSupport(), f))),
+    alwaysDenied: [...others.map((f) => realPath(join(appSupport(), f))), realPath(signerSocketDir())],
   };
 }
 /** Grant a folder; refuses the home folder itself, the root, and protected locations. */
@@ -154,9 +159,32 @@ export function machineLabel(): string {
  */
 export async function agentRelay(c: AgentConnection): Promise<RelayLaunch> {
   // K4 handle for the relay: signs agent assertions only (signerSocket.ts).
-  const socketPath = join(dataDir(), "agent-signer.sock");
+  const socketPath = signerSocketPath();
   if (!signerServer) signerServer = await startSignerSocket(socketPath, () => getServices().agentIdentity.connection(), keychainSigner);
   return relayLaunch(c, { node: process.execPath, entry: join(resourcesDir(), "relay.mjs"), socketPath, home: process.env.HOME ?? "" });
+}
+
+/**
+ * The K4 signer socket lives in a short private folder under the per-user TMPDIR: a Unix socket path must fit in
+ * 104 bytes, and <Application Support>/com.tealbrick.desktop/Chat/profiles/plane-…/agent-signer.sock is ~116.
+ * One folder per data folder (hash), mode 0700; the agent's file policy denies it.
+ */
+export function signerSocketDir(): string {
+  const id = createHash("sha256").update(dataDir()).digest("hex").slice(0, 12);
+  return join(tmpdir(), `tbd-${id}`);
+}
+export function signerSocketPath(): string {
+  const dir = signerSocketDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Never use a folder someone else made (TMPDIR can fall back to the shared /tmp): ours, a real folder, private.
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink() || (typeof process.getuid === "function" && st.uid !== process.getuid())) {
+    throw new Error(`The signer socket folder is not TBD's own: ${dir}`);
+  }
+  chmodSync(dir, 0o700);
+  const path = join(dir, "signer.sock");
+  if (Buffer.byteLength(path) > 103) throw new Error(`The signer socket path is too long for macOS (${Buffer.byteLength(path)} bytes): ${path}`);
+  return path;
 }
 
 function resourcesDir(): string { return process.env.TBD_RESOURCES ?? join(process.execPath, ".."); }
