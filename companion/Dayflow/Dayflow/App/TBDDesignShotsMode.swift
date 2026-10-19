@@ -126,6 +126,10 @@
           try render(SettingsView(initialSection: tab).padding(15), size: wide, dark: dark, name: "settings-\(tab)-1600-\(theme)")
         }
         try render(TBDCompanionSetup(), size: main, dark: dark, name: "setup-\(theme)")
+        // WP-ONB: the built first-launch flow, every step and the summary in two states (C286 mockups).
+        for (name, flow) in OnboardingShots.screens() {
+          try render(TBDOnboardingView(flow: flow), size: main, dark: dark, name: "onboarding-\(name)-\(theme)")
+        }
         try render(StatusMenuView(dismissMenu: {}), size: CGSize(width: 320, height: 640), dark: dark, name: "menu-\(theme)")
       }
 
@@ -376,4 +380,30 @@
       return (counted, out, unclassified)
     }
   }
+/// Fixed states for the onboarding shots (the same states as the approved mockups).
+@MainActor
+private enum OnboardingShots {
+  static func screens() -> [(String, TBDOnboardingController)] {
+    let all = Set(TBDOnboardingPermission.allCases)
+    let allOn = TBDOnboardingChecks(
+      signedIn: true, workspaceName: "Studio North", agentModelReady: true, agentModelName: "gpt-oss:20b", agentPaired: true,
+      granted: all, companionModelReady: true, companionModelName: "qwen3-vl:4b", speechModelOnDisk: true)
+    let some = TBDOnboardingChecks(
+      signedIn: true, workspaceName: "Studio North", granted: [.screenRecording, .microphone, .notifications],
+      speechDownload: 0.62)
+    return [
+      ("0-welcome", .preview(step: .welcome, choices: .init(), checks: .init())),
+      ("1-portal", .preview(step: .portal, choices: .init(portal: .yes), checks: .init())),
+      ("2-agent", .preview(step: .agent, choices: .init(portal: .no, agent: .yes, agentRuntime: .local),
+                           checks: .init(agentModelReady: true, agentModelName: "gpt-oss:20b"))),
+      ("3-permissions", .preview(step: .permissions, choices: .init(portal: .no, agent: .no),
+                                 checks: .init(granted: [.microphone, .notifications]), screenRequested: true)),
+      ("4-models", .preview(step: .models, choices: .init(portal: .no, agent: .no),
+                            checks: .init(granted: all, companionModelReady: true, companionModelName: "qwen3-vl:4b"))),
+      ("5-summary-all-on", .preview(step: .summary, choices: .init(portal: .yes, agent: .yes), checks: allOn)),
+      ("5-summary-some-skipped", .preview(step: .summary, choices: .init(portal: .yes, agent: .no), checks: some)),
+    ]
+  }
+}
+
 #endif

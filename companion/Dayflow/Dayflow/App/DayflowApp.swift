@@ -10,9 +10,15 @@ struct AppRootView: View {
   @AppStorage("didOnboard") private var didOnboard = false
   @EnvironmentObject private var categoryStore: CategoryStore
   @State private var goalFlowPresentation: DayGoalFlowPresentation? = nil
+  @ObservedObject private var onboarding = TBDOnboardingController.shared
 
   var body: some View {
     ZStack {
+      // WP-ONB (C285): the first-launch flow sets every prerequisite BEFORE the person enters the app, and a
+      // missing-dependency link reopens it at its step. It replaces the whole window (no rail, no Settings).
+      if onboarding.isShowing {
+        TBDOnboardingView()
+      } else {
       TBDWorkspaceView {
         Group {
           if didOnboard { MainView(goalFlowPresentation: $goalFlowPresentation) }
@@ -20,6 +26,7 @@ struct AppRootView: View {
         }
         .environmentObject(AppState.shared)
         .environmentObject(categoryStore)
+      }
       }
 
       goalFlowOverlay
@@ -79,10 +86,9 @@ struct DayflowApp: App {
               .accessibilityHidden(true)
           }
         }
-        // Use an explicit scheme even for System; clearing an override can lag until focus changes.
-        .preferredColorScheme(
-          didOnboard ? appearance.colorScheme(system: systemAppearance.colorScheme) : .light
-        )
+        // Use an explicit scheme even for System; clearing an override can lag until focus changes. The
+        // onboarding flow has light and dark designs (C286), so it follows the appearance too.
+        .preferredColorScheme(appearance.colorScheme(system: systemAppearance.colorScheme))
         .resolveDayflowTheme()
         .resolveStylePreview()
         .onAppear { dispatchPendingNotificationNavigation(after: 0.1) }

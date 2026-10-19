@@ -1,5 +1,6 @@
 import AppKit
 import TBDDesign
+import TBDModels
 import SwiftUI
 
 extension MainView {
@@ -313,7 +314,8 @@ extension MainView {
     withAnimation(TBDMotion.spring) {
       showScreenRecordingPermissionNotice = false
     }
-    ScreenRecordingPermissionNotice.openSystemSettings()
+    // WP-ONB link: the setup's Permissions step asks macOS and offers "Quit and reopen TBD".
+    NotificationCenter.default.post(name: .tbdOpenOnboarding, object: TBDOnboardingStep.permissions.rawValue)
   }
 
   private func handleScreenRecordingPermissionNoticeDismiss() {

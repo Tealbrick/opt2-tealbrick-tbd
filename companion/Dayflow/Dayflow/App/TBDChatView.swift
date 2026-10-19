@@ -72,11 +72,13 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
   func accountCall(_ channel: String, args: [Any] = []) async throws -> Any {
     let allowed: Set<String> = ["session", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
       // Read-only: agent directory (TBD agent) and the verified update feed for the native updater.
-      "listAgents", "checkUpdate"]
+      "listAgents", "checkUpdate",
+      // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
+      "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect"]
     guard allowed.contains(channel) else { throw failure("Unsupported account operation") }
     start()
     guard ready || process?.isRunning == true else { throw failure(status) }
-    return try await hostCall(channel, args: args, timeout: .seconds(channel == "awaitSignIn" ? 660 : 45),
+    return try await hostCall(channel, args: args, timeout: .seconds(["awaitSignIn", "awaitAgentConnect"].contains(channel) ? 660 : 45),
                               timeoutMessage: "Portal operation timed out. Refresh to check current state.")
   }
 
@@ -341,11 +343,13 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     case "reveal": NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: text)]); return NSNull()
     case "activate": NSApp.activate(ignoringOtherApps: true); return NSNull()
     case "listening": TBDListeningRuntime.shared.activate?(); return NSNull()
-    // Chat first-run checks: deep links to Settings → Models or Account only.
+    // Chat first-run checks ("No model set", sign-in/workspace): the setup flow at TBD's agent or the workspace step
+    // (WP-ONB missing-dependency links). Only these two sections.
     case "openSettings":
       guard ["engine", "account"].contains(text) else { throw failure("Unsupported settings section") }
       NSApp.activate(ignoringOtherApps: true)
-      NotificationCenter.default.post(name: Notification.Name("tbdOpenSettings"), object: text)
+      let step: TBDOnboardingStep = text == "engine" ? .agent : .portal
+      NotificationCenter.default.post(name: .tbdOpenOnboarding, object: step.rawValue)
       return NSNull()
     case "openDialog":
       let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
