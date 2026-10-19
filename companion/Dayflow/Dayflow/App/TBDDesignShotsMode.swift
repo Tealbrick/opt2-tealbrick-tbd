@@ -119,6 +119,9 @@
       // pages render their real content.
       _ = TBDListeningRuntime.shared.previewSettings(section: "capture")
 
+      // Agents (WP-WALL): seeded rosters, frozen wall, no helper call.
+      let wall = AgentWallShotsSeed.stores()
+
       let main = CGSize(width: 1280, height: 800)
       let wide = CGSize(width: 1600, height: 1000)
       let settingsTabs = TBDSettingsRoute.sections
@@ -185,6 +188,14 @@
             FlowView(planner: flow, tab: .observer, showsTasklistImport: true, observer: screen.agent, observerModel: screen.model)
               .background(TBDColor.tile),
             size: main, dark: dark, name: "flow-observer\(screen.suffix)-\(theme)")
+        }
+        // Agents (WP-WALL): the restored roster wall, the signed-in wall with only TBD, and the signed-out wall; two window sizes.
+        for (name, store) in wall {
+          for (size, suffix) in [(main, ""), (wide, "-1600")] {
+            try render(
+              AgentWallView(store: store, frozen: true).background(TBDColor.tile), size: size, dark: dark,
+              name: "agents-\(name)\(suffix)-\(theme)")
+          }
         }
         // The debug card open (its Overlay tab), so its controls are in the contrast audit too.
         try render(
@@ -260,6 +271,40 @@
       window.contentView = nil
       retained.append(window)
       return rep
+    }
+  }
+
+  // MARK: - Agents wall shots
+
+  /// The rosters of the Agents shots, in the shape the helper answers `listAgents`. Seeded and frozen: the stores never ask
+  /// the helper, and the names are made up.
+  @MainActor
+  enum AgentWallShotsSeed {
+    static let rows: [[String: Any]] = [
+      ["id": "tbd-default", "name": "TBD", "runtime": "tbd-default"],
+      ["id": "a1", "name": "Henry", "runtime": "workspace", "workspace": ["purpose": "Triage and drafts", "state": "online", "harness": "Claude Agent SDK"]],
+      ["id": "a2", "name": "Tempo", "runtime": "workspace", "workspace": ["purpose": "Plan and reminders", "state": "paused", "harness": "Codex"]],
+      ["id": "a3", "name": "Nova", "runtime": "workspace", "workspace": ["purpose": "Research", "state": "online", "harness": "LangChain"]],
+      ["id": "a4", "name": "Scribe", "runtime": "workspace", "workspace": ["purpose": "Meeting notes", "state": "offline", "harness": "Claude Agent SDK"]],
+      ["id": "a5", "name": "Atlas", "runtime": "workspace", "workspace": ["purpose": "Code review", "state": "online", "harness": "Codex"]],
+    ]
+
+    static func stores() -> [(String, AgentWallRosterStore)] {
+      func store(_ roster: AgentWallRoster, signedIn: Bool) -> AgentWallRosterStore {
+        let store = AgentWallRosterStore(client: SeededClient(), signedIn: { signedIn }, isAppActive: { false })
+        store.seed(roster, signedIn: signedIn)
+        return store
+      }
+      return [
+        ("restored", store(.decode(rows), signedIn: true)),
+        ("empty", store(.decode(Array(rows.prefix(1))), signedIn: true)),
+        ("signed-out", store(.ownOnly, signedIn: false)),
+      ]
+    }
+
+    /// Never asked: a frozen store makes no call. If it were, the shots would show it as a failure.
+    private struct SeededClient: AgentWallRosterClient {
+      func listAgents() async throws -> Any { throw CocoaError(.userCancelled) }
     }
   }
 

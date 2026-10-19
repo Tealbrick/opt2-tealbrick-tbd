@@ -164,6 +164,7 @@ extension Notification.Name {
   static let navigateToSupport = Notification.Name("navigateToSupport")
   static let navigateToWeekly = Notification.Name("navigateToWeekly")
   static let navigateToFlow = Notification.Name("navigateToFlow")
+  static let navigateToAgents = Notification.Name("navigateToAgents")
   static let timelineDataUpdated = Notification.Name("timelineDataUpdated")
   static let showTimelineFailureToast = Notification.Name("showTimelineFailureToast")
   static let showScreenRecordingPermissionNotice = Notification.Name(

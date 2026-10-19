@@ -124,6 +124,11 @@ struct MainView: View {
           selectedIcon = .flow
         }
       }
+      .onReceive(NotificationCenter.default.publisher(for: .navigateToAgents)) { _ in
+        withAnimation(TBDMotion.spring) {
+          selectedIcon = .agents
+        }
+      }
   }
 
   @discardableResult
