@@ -67,6 +67,8 @@ extension MainView {
       case .flow:
         FlowView()
           .onAppear { FlowCardLabeller.shared.runNow() }
+      case .agents:
+        AgentWallView()
       case .daily:
         DailyView(selectedDate: $selectedDate)
       case .weekly:
