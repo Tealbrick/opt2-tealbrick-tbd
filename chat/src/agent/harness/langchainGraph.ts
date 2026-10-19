@@ -132,7 +132,8 @@ function stopped(): Error {
 
 /**
  * Run one turn: load the history, stream the graph (`streamEvents` v2), map model tokens to deltas, save the history.
- * The history is saved only when the turn ends with an answer; a stopped or failed turn leaves the session as it was.
+ * Sessions: a `sessionId` with no saved history starts a new history under that same id (the Agent SDK would refuse
+ * it). The history is saved only when the turn ends with an answer; a stopped or failed turn leaves it as it was.
  */
 export async function runTurn(input: TurnInput): Promise<{ sessionId: string; reply: string }> {
   const { signal, hooks } = input;

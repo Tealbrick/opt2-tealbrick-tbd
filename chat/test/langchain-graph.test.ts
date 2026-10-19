@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIMessage, AIMessageChunk, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
@@ -30,7 +30,12 @@ function recorder() {
 }
 
 const fixedId = () => "sess-1";
-const privateTemp = () => mkdtempSync(join(tmpdir(), "tbd-lc-"));
+/** A temp folder the test removes itself when it ends. */
+const privateTemp = (t: { after(fn: () => void): void }) => {
+  const dir = mkdtempSync(join(tmpdir(), "tbd-lc-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
 
 test("graph: deltas arrive in order, then the final reply; the session is saved", async () => {
   const { log, hooks } = recorder();
@@ -154,8 +159,8 @@ test("content: only text blocks are visible text (never thinking or tool blocks)
 
 // ---------------------------------------------------------------- sessions
 
-test("sessions: save and load round trip on disk, files private", () => {
-  const dir = privateTemp();
+test("sessions: save and load round trip on disk, files private", (t) => {
+  const dir = privateTemp(t);
   const store = fileSessionStore(dir);
   assert.equal(store.load("abc"), null);
   store.save("abc", [new HumanMessage("hi"), new AIMessage("hello")]);
@@ -169,8 +174,8 @@ test("sessions: save and load round trip on disk, files private", () => {
   assert.equal(existsSync(`${file}.${process.pid}.tmp`), false, "no temp file is left behind");
 });
 
-test("sessions: a turn with a session id resumes the saved history, and the next save grows it", async () => {
-  const dir = privateTemp();
+test("sessions: a turn with a session id resumes the saved history, and the next save grows it", async (t) => {
+  const dir = privateTemp(t);
   const store = fileSessionStore(dir);
   const seen: string[][] = [];
   const model: ChatModelLike = { invoke: async (input) => { seen.push(input.map((m) => contentText(m.content))); return new AIMessage(`answer ${seen.length}`); } };
@@ -181,8 +186,8 @@ test("sessions: a turn with a session id resumes the saved history, and the next
   assert.deepEqual((fileSessionStore(dir).load(first.sessionId) ?? []).map((m) => contentText(m.content)), ["one", "answer 1", "two", "answer 2"]);
 });
 
-test("sessions: a session id with a path part is refused; a damaged file is an error, not a crash", () => {
-  const dir = privateTemp();
+test("sessions: a session id with a path part is refused; a damaged file is an error, not a crash", (t) => {
+  const dir = privateTemp(t);
   const store = fileSessionStore(dir);
   for (const id of ["../x", "a/b", "", ".hidden", "a b", "x".repeat(200)]) {
     assert.equal(isSessionId(id), false, id);
