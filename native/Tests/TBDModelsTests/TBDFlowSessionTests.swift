@@ -66,6 +66,18 @@ final class TBDFlowSessionTests: XCTestCase {
         XCTAssertFalse(p.isOnBreak)
     }
 
+    func testAGoalTextIsCappedAt300CharactersWithAnEllipsis() throws {
+        let long = task("long", "Write report", "09:00:00", "10:00:00", notes: String(repeating: "n", count: 2000), subtasks: ["outline"])
+        let short = task("short", "Tidy desk", "09:05:00", "10:00:00", notes: String(repeating: "x", count: 100))
+        let p = try XCTUnwrap(plan([long, short], now: "09:45:00"))
+        XCTAssertEqual(p.goals[0].title.count, TBDFlowSession.maxGoalTextLength)
+        XCTAssertTrue(p.goals[0].title.hasPrefix("Write report — Required steps: outline — nnn"))
+        XCTAssertTrue(p.goals[0].title.hasSuffix("n…"))
+        XCTAssertEqual(p.goals[1].title, "Tidy desk — " + String(repeating: "x", count: 100), "a short text is not changed")
+        let exact = task("exact", String(repeating: "a", count: 300), "09:00:00", "10:00:00")
+        XCTAssertEqual(TBDFlowSession.goalText(exact), String(repeating: "a", count: 300), "exactly 300 stays whole")
+    }
+
     func testStartsAtIsNowOrTheKeptValue() throws {
         let t = [task("a", "A", "09:00:00", "11:00:00")]
         XCTAssertEqual(plan(t, now: "10:00:00")?.startsAt, at("10:00:00"))

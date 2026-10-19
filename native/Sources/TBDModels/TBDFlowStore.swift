@@ -16,7 +16,8 @@ public struct TBDFlowTickResult: Equatable, Sendable {
 ///   is atomic: the new state is written first and replaces the old one only if the write worked.
 /// - The file is written atomically (temp file in the same folder, then rename), mode 0600, in a folder of mode 0700.
 /// - A file that cannot be read is moved aside to `flow.json.corrupt-<timestamp>` (renamed, never deleted) and Flow
-///   starts empty; `corruptBackupURL` tells the app so it can say so.
+///   starts empty; `corruptBackupURL` tells the app so it can say so. If the file cannot be moved aside, the store
+///   refuses every write (`isLockedByUnreadableFile`): it never overwrites the unreadable file.
 /// - The clock and the id generator are injected, so tests do not depend on the real date.
 public final class TBDFlowStore: @unchecked Sendable {
     /// `~/Library/Application Support/<TBD data folder>/Companion/flow.json`. The data folder is `TBDIdentity.dataFolder`
@@ -28,12 +29,17 @@ public final class TBDFlowStore: @unchecked Sendable {
     /// A reminder that was acknowledged this long ago, for a task that is gone or finished, is dropped by `tick`.
     public static let reminderRetention: TimeInterval = 14 * 24 * 3600
 
+    /// A reminder whose due time is more than this long before `now` when `tick` makes it is stored already acknowledged:
+    /// no catch-up storm after a paste, an import or a relaunch.
+    public static let staleReminderAge: TimeInterval = 15 * 60
+
     public let url: URL
     private let clock: @Sendable () -> Date
     private let makeID: @Sendable () -> String
     private let lock = NSLock()
     private var current: TBDFlowState
     private var movedAside: URL?
+    private var unreadableAndKept = false
 
     public init(url: URL = TBDFlowStore.defaultURL, clock: @escaping @Sendable () -> Date = { Date() },
                 makeID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() }) {
@@ -48,6 +54,8 @@ public final class TBDFlowStore: @unchecked Sendable {
     public var state: TBDFlowState { locked { current } }
     /// Where the unreadable file went, when the last load moved one aside.
     public var corruptBackupURL: URL? { locked { movedAside } }
+    /// The list file could not be read and could not be moved aside: the list is empty and every write is refused.
+    public var isLockedByUnreadableFile: Bool { locked { unreadableAndKept } }
 
     // MARK: Disk
 
@@ -72,7 +80,7 @@ public final class TBDFlowStore: @unchecked Sendable {
             n += 1
             target = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".corrupt-" + stamp + "-\(n)")
         }
-        if (try? fm.moveItem(at: url, to: target)) != nil { movedAside = target }
+        if (try? fm.moveItem(at: url, to: target)) != nil { movedAside = target } else { unreadableAndKept = true }
         return TBDFlowState()
     }
 
@@ -85,6 +93,9 @@ public final class TBDFlowStore: @unchecked Sendable {
     }
 
     private func write(_ state: TBDFlowState) throws {
+        if unreadableAndKept {
+            throw TBDFlowError.storage("Flow could not read the list file and could not move it aside, so it does not save over it")
+        }
         let fm = FileManager.default
         let dir = url.deletingLastPathComponent()
         do {
@@ -363,7 +374,7 @@ public final class TBDFlowStore: @unchecked Sendable {
 
     // MARK: Tick
 
-    /// The scheduler step (`server.py` `tick()`, run every second there). Creates the reminders that are due:
+    /// The scheduler step (`server.py` `tick()`, run every second there). Creates the reminders that are due (one that is more than `staleReminderAge` overdue is stored acknowledged and not returned):
     /// "Start: X" at the start (or at the end for a task with only an end), and "Timebox ended: X — finish or replan" at
     /// the end of a timebox for a task that is not done. A reminder is made once per `dedupKey`. A timebox that ended
     /// acknowledges the task's start reminder. A running timer past its end becomes `finished`. Old acknowledged reminders
@@ -375,7 +386,13 @@ public final class TBDFlowStore: @unchecked Sendable {
             func add(_ kind: TBDFlowReminderKind, _ task: TBDFlowTask, at when: Date, title: String) {
                 let key = TBDFlowReminder.dedupKey(kind: kind, taskID: task.id, at: when)
                 guard !state.reminders.contains(where: { $0.dedupKey == key }) else { return }
-                let r = TBDFlowReminder(id: makeID(), kind: kind, taskID: task.id, title: title, createdAt: now, dedupKey: key)
+                var r = TBDFlowReminder(id: makeID(), kind: kind, taskID: task.id, title: title, createdAt: now, dedupKey: key)
+                if now.timeIntervalSince(when) > Self.staleReminderAge {
+                    // Long overdue when first seen: remembered for dedup, never shown.
+                    r.acknowledgedAt = now
+                    state.reminders.append(r)
+                    return
+                }
                 state.reminders.append(r)
                 created.append(r)
             }

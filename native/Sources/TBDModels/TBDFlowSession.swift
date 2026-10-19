@@ -61,8 +61,18 @@ public enum TBDFlowSession {
             goals: goals.map { TBDFlowGoal(id: $0.id, title: goalText($0)) }, onBreakUntil: onBreakUntil)
     }
 
-    /// `Title — Required steps: a; b — notes`, with the parts that are empty left out.
+    /// The longest goal text the observer gets. Longer text is cut and ends with "…".
+    public static let maxGoalTextLength = 300
+
+    /// `Title — Required steps: a; b — notes`, with the parts that are empty left out, at most `maxGoalTextLength`
+    /// characters (the goal text goes to the model on every check).
     public static func goalText(_ task: TBDFlowTask) -> String {
+        let full = fullGoalText(task)
+        guard full.count > maxGoalTextLength else { return full }
+        return String(full.prefix(maxGoalTextLength - 1)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    private static func fullGoalText(_ task: TBDFlowTask) -> String {
         task.title
             + (task.subtasks.isEmpty ? "" : " — Required steps: " + task.subtasks.map(\.title).joined(separator: "; "))
             + (task.notes.isEmpty ? "" : " — " + task.notes)

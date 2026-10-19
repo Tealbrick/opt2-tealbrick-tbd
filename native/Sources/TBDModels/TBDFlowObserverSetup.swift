@@ -224,6 +224,6 @@ public final class TBDFlowObserverSetup: @unchecked Sendable {
 
     /// The consent sentence for the cloud choice.
     public static func consentSentence(provider: String) -> String {
-        "Every 15 seconds a screenshot goes to \(provider). Use this only if you accept that."
+        "Every 15 seconds a screenshot goes to \(provider). The titles of your timeline cards and tasks also go there, to sort your day. Use this only if you accept that."
     }
 }

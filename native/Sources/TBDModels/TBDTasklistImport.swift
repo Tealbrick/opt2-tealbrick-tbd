@@ -23,10 +23,11 @@ public struct TBDTasklistImportResult: Equatable, Sendable {
 
 /// One-time, READ-ONLY import of open tasks from the v1 Tasklist database (DESIGN-FLOW.md 2.2).
 ///
-/// The Tasklist files are never written, moved or deleted. The database is opened with `SQLITE_OPEN_READONLY` through a
-/// `file:` URI. When the Tasklist service has a live write-ahead log, the read-only connection reads it as it is (the
-/// service owns the shared-memory file). Otherwise the file is opened `immutable=1`, so SQLite creates no `-wal` or
-/// `-shm` file next to it. Tasks are JSON blobs in `tasks(id TEXT PRIMARY KEY, data TEXT NOT NULL)`.
+/// The Tasklist files are never opened by us, written, moved or deleted. The import copies `tasklist.sqlite3` and, when
+/// there is one, its `-wal` (never the `-shm`) into a fresh folder in the temporary directory, opens the COPY so SQLite
+/// replays the copied log, reads, closes, and then removes only the files it made there, one by one by exact name. A copy
+/// taken while the service writes is checked: if the source files changed during the copy, it is taken again. Tasks are
+/// JSON blobs in `tasks(id TEXT PRIMARY KEY, data TEXT NOT NULL)`.
 ///
 /// What comes in: status `todo` or `doing`, and a `day` that is today or later, or no `day`. Each task keeps its id with
 /// the prefix `tasklist-`; a task already in the list is skipped. Fields without a Flow home (priority, reminder minutes,
@@ -101,28 +102,59 @@ public enum TBDTasklistImport {
             day: resolvedDay, startAt: start, endAt: end, createdAt: created, updatedAt: date("updated_at") ?? created)
     }
 
-    // MARK: SQLite (read-only)
+    // MARK: SQLite (on a copy)
+
+    private struct FileSignature: Equatable {
+        var size: Int
+        var modified: Date?
+    }
+
+    private static func signature(_ url: URL) -> FileSignature? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
+        return FileSignature(size: (attrs[.size] as? NSNumber)?.intValue ?? 0, modified: attrs[.modificationDate] as? Date)
+    }
 
     private static func readRows(_ path: URL) throws -> [(String, String)] {
         let fm = FileManager.default
-        let walSize = (try? fm.attributesOfItem(atPath: path.path + "-wal")[.size] as? NSNumber)?.intValue ?? 0
-        // A live log: read it in place. No log: immutable, so no side files are created.
-        let attempts = walSize > 0 ? ["mode=ro", "mode=ro&immutable=1"] : ["mode=ro&immutable=1"]
-        var lastError = "unknown error"
-        for query in attempts {
-            do { return try query1(path: path, query: query) } catch let TBDTasklistImportError.unreadable(why) { lastError = why }
+        let scratch = fm.temporaryDirectory.appendingPathComponent("tbd-tasklist-import-" + UUID().uuidString, isDirectory: true)
+        do {
+            try fm.createDirectory(at: scratch, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        } catch {
+            throw TBDTasklistImportError.unreadable("no temporary folder: \(error.localizedDescription)")
         }
-        throw TBDTasklistImportError.unreadable(lastError)
+        let name = path.lastPathComponent
+        let copy = scratch.appendingPathComponent(name)
+        // Only files this function creates are ever removed, by exact name. SQLite adds the log, shared-memory and
+        // journal files of the copy; it removes them itself on a clean close and the loop below catches the rest.
+        let ours = [name, name + "-wal", name + "-shm", name + "-journal"].map { scratch.appendingPathComponent($0) }
+        defer {
+            for file in ours where fm.fileExists(atPath: file.path) { try? fm.removeItem(at: file) }
+            try? fm.removeItem(at: scratch) // empty by now: this removes only the folder we made
+        }
+        let sourceWAL = URL(fileURLWithPath: path.path + "-wal")
+        let copyWAL = URL(fileURLWithPath: copy.path + "-wal")
+        var copied = false
+        for _ in 0..<3 {
+            let before = (signature(path), signature(sourceWAL))
+            for file in [copy, copyWAL] where fm.fileExists(atPath: file.path) { try? fm.removeItem(at: file) }
+            do {
+                if before.1 != nil { try fm.copyItem(at: sourceWAL, to: copyWAL) }
+                try fm.copyItem(at: path, to: copy)
+            } catch {
+                throw TBDTasklistImportError.unreadable("copy failed: \(error.localizedDescription)")
+            }
+            if (signature(path), signature(sourceWAL)) == before { copied = true; break }
+        }
+        if !copied { throw TBDTasklistImportError.unreadable("the database kept changing while it was copied; try again") }
+        for file in [copy, copyWAL] where fm.fileExists(atPath: file.path) {
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) // the source may be read-only
+        }
+        return try query(copy: copy)
     }
 
-    private static func query1(path: URL, query: String) throws -> [(String, String)] {
-        var comps = URLComponents()
-        comps.scheme = "file"
-        comps.path = path.path
-        comps.percentEncodedQuery = query
-        guard let uri = comps.string else { throw TBDTasklistImportError.unreadable("bad path") }
+    private static func query(copy: URL) throws -> [(String, String)] {
         var db: OpaquePointer?
-        let rc = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nil)
+        let rc = sqlite3_open_v2(copy.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nil)
         defer { sqlite3_close(db) }
         guard rc == SQLITE_OK, let db else { throw TBDTasklistImportError.unreadable(db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed") }
         sqlite3_busy_timeout(db, 1000)

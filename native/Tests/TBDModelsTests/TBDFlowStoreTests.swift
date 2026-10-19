@@ -73,6 +73,32 @@ final class TBDFlowStoreTests: TBDFlowTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
     }
 
+    func testWhenTheCorruptFileCannotBeMovedAsideTheStoreRefusesToWrite() throws {
+        let dir = flowURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let junk = Data("{ this is not json".utf8)
+        try junk.write(to: flowURL)
+        // A folder nobody can add files to: the rename fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+        let store = makeStore()
+        XCTAssertNil(store.corruptBackupURL)
+        XCTAssertTrue(store.isLockedByUnreadableFile)
+        XCTAssertTrue(store.state.tasks.isEmpty)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        XCTAssertThrowsError(try store.addTask(title: "Fresh", day: day))
+        XCTAssertEqual(try Data(contentsOf: flowURL), junk, "the unreadable file is never overwritten")
+        XCTAssertTrue(store.state.tasks.isEmpty)
+    }
+
+    func testAMovedAsideFileLeavesTheStoreWritable() throws {
+        try FileManager.default.createDirectory(at: flowURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("junk".utf8).write(to: flowURL)
+        let store = makeStore()
+        XCTAssertFalse(store.isLockedByUnreadableFile)
+        XCTAssertNoThrow(try store.addTask(title: "Fresh", day: day))
+    }
+
     func testSecondCorruptFileOfTheSameSecondGetsAnotherName() throws {
         let dir = flowURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -222,6 +248,29 @@ final class TBDFlowStoreTests: TBDFlowTestCase {
         // Three more ticks add nothing (Tasklist test_reminder_deduplication_and_ack).
         for _ in 0..<3 { clock.advance(1); XCTAssertFalse(try store.tick().changed) }
         XCTAssertEqual(store.state.reminders.count, 1)
+    }
+
+    func testPastingAMorningPlanAt1400MakesNoToast() throws {
+        let store = makeStore()
+        try store.addTask(title: "Morning A", day: day, startAt: at("08:00:00"), endAt: at("09:00:00"))
+        try store.addTask(title: "Morning B", day: day, startAt: at("09:00:00"))
+        try store.addTask(title: "Running", day: day, startAt: at("13:50:00"))
+        clock.set("2026-10-05T14:00:00Z")
+        let r = try store.tick()
+        XCTAssertEqual(r.newReminders.map(\.title), ["Start: Running"], "only the one that is 10 minutes old is shown")
+        XCTAssertEqual(store.state.reminders.count, 3)
+        let stale = store.state.reminders.filter { $0.title != "Start: Running" }
+        XCTAssertTrue(stale.allSatisfy { $0.acknowledgedAt == clock.now }, "stored acknowledged")
+        XCTAssertEqual(store.pendingReminders(now: clock.now).map(\.title), ["Start: Running"])
+        clock.advance(60)
+        XCTAssertFalse(try store.tick().changed, "no catch-up on the next tick either")
+    }
+
+    func testAReminderExactlyAtTheEdgeOfTheWindowStillShows() throws {
+        let store = makeStore()
+        try store.addTask(title: "Edge", day: day, startAt: at("13:45:00"))
+        clock.set("2026-10-05T14:00:00Z")
+        XCTAssertEqual(try store.tick().newReminders.count, 1, "exactly 15 minutes is not more than 15 minutes")
     }
 
     func testSnoozeHidesTheReminderUntilItsTimeAndDoneAcknowledgesIt() throws {

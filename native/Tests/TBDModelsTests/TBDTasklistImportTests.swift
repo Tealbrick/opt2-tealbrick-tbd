@@ -155,25 +155,80 @@ final class TBDTasklistImportTests: TBDFlowTestCase {
         XCTAssertEqual(store.state.tasks.count, 4)
     }
 
-    func testALiveWriteAheadLogIsReadInPlaceWithoutTouchingTheMainFile() throws {
+    /// Every file in a folder with its bytes and modification time.
+    private func snapshot(_ dir: URL) throws -> [String: (Data, Date)] {
+        var out: [String: (Data, Date)] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            out[name] = try fingerprint(dir.appendingPathComponent(name))
+        }
+        return out
+    }
+
+    private func assertUnchanged(_ before: [String: (Data, Date)], _ after: [String: (Data, Date)], file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(before.keys.sorted(), after.keys.sorted(), "same listing", file: file, line: line)
+        for (name, value) in before {
+            XCTAssertEqual(after[name]?.0, value.0, "same bytes: \(name)", file: file, line: line)
+            XCTAssertEqual(after[name]?.1, value.1, "same modification time: \(name)", file: file, line: line)
+        }
+    }
+
+    private func importerTempFolders() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? [])
+            .filter { $0.hasPrefix("tbd-tasklist-import-") }.sorted()
+    }
+
+    func testALiveWriteAheadLogIsReadFromACopyWithoutTouchingTheSourceFolder() throws {
         // The Tasklist service runs in WAL mode; a task it just wrote is only in the -wal file.
         let writer = try makeDB(wal: true, keepOpen: true)
         defer { sqlite3_close(writer) }
         insert(writer, id: "w1", json: task("w1", title: "Only in the log", day: "2026-10-06"))
         let wal = dbURL.path + "-wal"
         XCTAssertGreaterThan(((try FileManager.default.attributesOfItem(atPath: wal)[.size]) as? NSNumber)?.intValue ?? 0, 0, "the test needs a live log")
-        let before = try fingerprint(dbURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dbURL.path + "-shm"), "the live service has a shared-memory file")
+        let before = try snapshot(dbURL.deletingLastPathComponent())
+        let tempBefore = importerTempFolders()
         Thread.sleep(forTimeInterval: 1.1)
 
         let store = makeStore()
         try TBDTasklistImport.importOpenTasks(into: store, from: dbURL, now: now, calendar: FlowT.utc)
         XCTAssertNotNil(store.task(id: "tasklist-w1"), "the log content was read")
         XCTAssertEqual(store.state.tasks.count, 5)
-        let after = try fingerprint(dbURL)
-        XCTAssertEqual(after.0, before.0)
-        XCTAssertEqual(after.1, before.1)
+        assertUnchanged(before, try snapshot(dbURL.deletingLastPathComponent()))
+        XCTAssertEqual(importerTempFolders(), tempBefore, "the copy is gone")
         // The service can still write after the import (we held no lock).
         insert(writer, id: "w2", json: task("w2", title: "Later"))
+    }
+
+    func testAKilledServiceWithALogAndNoSharedMemoryFileImportsTheLogRowsAndChangesNothing() throws {
+        let writer = try makeDB(wal: true, keepOpen: true)
+        insert(writer, id: "w1", json: task("w1", title: "Only in the log", day: "2026-10-06"))
+        // What a killed service leaves: the database and a non-empty -wal, no -shm.
+        let dead = folder.appendingPathComponent("Dead", isDirectory: true)
+        try FileManager.default.createDirectory(at: dead, withIntermediateDirectories: true)
+        let deadDB = dead.appendingPathComponent("tasklist.sqlite3")
+        try FileManager.default.copyItem(at: dbURL, to: deadDB)
+        try FileManager.default.copyItem(atPath: dbURL.path + "-wal", toPath: deadDB.path + "-wal")
+        sqlite3_close(writer)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dead.path).sorted(), ["tasklist.sqlite3", "tasklist.sqlite3-wal"])
+        XCTAssertGreaterThan(((try FileManager.default.attributesOfItem(atPath: deadDB.path + "-wal")[.size]) as? NSNumber)?.intValue ?? 0, 0)
+        let before = try snapshot(dead)
+        let tempBefore = importerTempFolders()
+        Thread.sleep(forTimeInterval: 1.1)
+
+        let store = makeStore()
+        try TBDTasklistImport.importOpenTasks(into: store, from: deadDB, now: now, calendar: FlowT.utc)
+        XCTAssertNotNil(store.task(id: "tasklist-w1"), "WAL-only rows are imported")
+        XCTAssertEqual(store.state.tasks.count, 5)
+        assertUnchanged(before, try snapshot(dead))
+        XCTAssertEqual(importerTempFolders(), tempBefore, "the copy is gone")
+    }
+
+    func testTheCopyFolderIsGoneAlsoWhenTheFileIsNotADatabase() throws {
+        try FileManager.default.createDirectory(at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a database at all, just text".utf8).write(to: dbURL)
+        let tempBefore = importerTempFolders()
+        XCTAssertThrowsError(try TBDTasklistImport.readOpenTasks(at: dbURL, now: now, calendar: FlowT.utc))
+        XCTAssertEqual(importerTempFolders(), tempBefore)
     }
 
     func testAFileThatIsNotADatabaseIsAnError() throws {

@@ -193,6 +193,6 @@ final class TBDFlowObserverSetupTests: XCTestCase {
         XCTAssertEqual(TBDFlowObserverSetup.providerName(TBDModelConnection(name: "x", endpoint: "https://api.anthropic.com", kind: .anthropic)), "Anthropic")
         XCTAssertEqual(TBDFlowObserverSetup.providerName(TBDModelConnection(name: "My gateway", endpoint: "https://gw.example.com/v1")), "My gateway")
         XCTAssertEqual(TBDFlowObserverSetup.consentSentence(provider: "Anthropic"),
-                       "Every 15 seconds a screenshot goes to Anthropic. Use this only if you accept that.")
+                       "Every 15 seconds a screenshot goes to Anthropic. The titles of your timeline cards and tasks also go there, to sort your day. Use this only if you accept that.")
     }
 }
