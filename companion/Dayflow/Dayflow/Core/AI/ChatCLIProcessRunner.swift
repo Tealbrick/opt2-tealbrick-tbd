@@ -116,20 +116,12 @@ struct ChatCLIProcessRunner {
   enum Constants {
     static let readChunkSize = 64 * 1024
     static let timeoutSeconds: TimeInterval = 300
-    static let codexFallbackDirectoryPrefix = "Dayflow-codex-home-"
   }
 
   let codexExecutableResolver: CodexExecutableResolver
 
   init(codexExecutableResolver: CodexExecutableResolver = .shared) {
     self.codexExecutableResolver = codexExecutableResolver
-  }
-
-  struct CodexFallbackContext {
-    let environment: [String: String]
-    let brokenConfigURL: URL
-    let didCopyAuth: Bool
-    let cleanup: () -> Void
   }
 
   final class BufferedPipeReader {
@@ -356,72 +348,12 @@ struct ChatCLIProcessRunner {
     return false
   }
 
-  func makeCodexFallbackContext(
-    fromInvalidTransportStderr stderr: String,
-    workingDirectory: URL,
-    fallbackConfigURL: URL? = nil
-  ) -> CodexFallbackContext? {
-    guard
-      let brokenConfigURL = invalidTransportConfigURL(
-        from: stderr,
-        fallbackConfigURL: fallbackConfigURL
-      )
-    else {
-      return nil
-    }
-    let fileManager = FileManager.default
-    let tempCodexHome = fileManager.temporaryDirectory
-      .appendingPathComponent(
-        Constants.codexFallbackDirectoryPrefix + UUID().uuidString, isDirectory: true)
-
-    do {
-      try fileManager.createDirectory(at: tempCodexHome, withIntermediateDirectories: true)
-    } catch {
-      print("[ChatCLI] Failed to create temporary CODEX_HOME: \(error.localizedDescription)")
-      return nil
-    }
-
-    var didCopyAuth = false
-    let sourceAuthURL = brokenConfigURL.deletingLastPathComponent().appendingPathComponent(
-      "auth.json")
-    let destinationAuthURL = tempCodexHome.appendingPathComponent("auth.json")
-    if fileManager.fileExists(atPath: sourceAuthURL.path) {
-      do {
-        try fileManager.copyItem(at: sourceAuthURL, to: destinationAuthURL)
-        didCopyAuth = true
-      } catch {
-        print(
-          "[ChatCLI] Failed to copy Codex auth cache for fallback: \(error.localizedDescription)")
-      }
-    }
-
-    return CodexFallbackContext(
-      environment: ["CODEX_HOME": tempCodexHome.path],
-      brokenConfigURL: brokenConfigURL,
-      didCopyAuth: didCopyAuth,
-      cleanup: {
-        try? fileManager.removeItem(at: tempCodexHome)
-      }
-    )
-  }
-
-  func codexFallbackContextIfNeeded(
-    tool: ChatCLITool,
-    stderr: String,
-    workingDirectory: URL,
-    hasRetriedInvalidTransport: Bool
-  ) -> CodexFallbackContext? {
-    guard
-      tool == .codex,
-      !hasRetriedInvalidTransport,
-      containsInvalidTransportError(stderr)
-    else {
-      return nil
-    }
-    return makeCodexFallbackContext(
-      fromInvalidTransportStderr: stderr,
-      workingDirectory: workingDirectory
-    )
+  /// Codex stopped on an "invalid transport" in the person's own Codex config. TBD does not work around it with a
+  /// copy of the Codex login (C287: TBD never reads, copies, stores or proxies CLI tokens, including ~/.codex/auth.json);
+  /// the person fixes the config in Codex.
+  func invalidCodexConfigMessage(stderr: String) -> String {
+    let path = invalidTransportConfigURL(from: stderr)?.path ?? defaultCodexConfigURL().path
+    return "Codex could not start: its config file has an invalid transport setting (\(path)). Fix it in Codex, then try again."
   }
 
   /// Run a streaming command, yielding events as JSONL lines arrive
@@ -752,35 +684,6 @@ struct ChatCLIProcessRunner {
       return
     }
 
-    if process.terminationStatus != 0,
-      let fallback = codexFallbackContextIfNeeded(
-        tool: tool,
-        stderr: finalState.2,
-        workingDirectory: workingDirectory,
-        hasRetriedInvalidTransport: hasRetriedInvalidTransport)
-    {
-      print(
-        "[ChatCLI] Retrying Codex with temporary CODEX_HOME after invalid transport in \(fallback.brokenConfigURL.path)"
-          + (fallback.didCopyAuth ? " (copied auth.json)" : "")
-      )
-      defer { fallback.cleanup() }
-      try await executeStreaming(
-        tool: tool,
-        prompt: prompt,
-        workingDirectory: workingDirectory,
-        model: model,
-        reasoningEffort: reasoningEffort,
-        sessionId: sessionId,
-        codexConfigOverrides: codexConfigOverrides,
-        continuation: continuation,
-        onProcessStart: onProcessStart,
-        processEnvironment: fallback.environment,
-        hasRetriedInvalidTransport: true,
-        hasRetriedExecutableResolution: hasRetriedExecutableResolution
-      )
-      return
-    }
-
     for event in finalEvents {
       continuation.yield(event)
     }
@@ -792,6 +695,8 @@ struct ChatCLIProcessRunner {
           .error(
             "\(toolName) CLI not found. Please install it and run '\(tool == .codex ? "codex auth" : "claude login")' in Terminal."
           ))
+      } else if tool == .codex, containsInvalidTransportError(stderr) {
+        continuation.yield(.error(invalidCodexConfigMessage(stderr: stderr)))
       } else if !stderr.isEmpty {
         continuation.yield(.error(stderr))
       }
@@ -1282,9 +1187,8 @@ struct ChatCLIProcessRunner {
       // when the CLI can. Disabling MCP servers one by one breaks on
       // plugin-registered servers (e.g. the computer-use app's cua_repl) that
       // have no config.toml entry — the override creates a partial table,
-      // config loading fails with "invalid transport", and the fallback
-      // below moves the run into a temporary CODEX_HOME where `exec resume`
-      // finds no rollout.
+      // config loading fails with "invalid transport" (then the person gets
+      // invalidCodexConfigMessage; TBD never copies the Codex login, C287).
       if Self.codexSupportsIgnoringUserConfig(
         executableCommand: executableCommand, resuming: codexResumeSessionId != nil)
       {
@@ -1434,35 +1338,10 @@ struct ChatCLIProcessRunner {
       )
     }
 
-    if process.terminationStatus != 0,
-      let fallback = codexFallbackContextIfNeeded(
-        tool: tool,
-        stderr: stderr,
-        workingDirectory: workingDirectory,
-        hasRetriedInvalidTransport: hasRetriedInvalidTransport)
-    {
-      print(
-        "[ChatCLI] Retrying Codex with temporary CODEX_HOME after invalid transport in \(fallback.brokenConfigURL.path)"
-          + (fallback.didCopyAuth ? " (copied auth.json)" : "")
-      )
-      defer { fallback.cleanup() }
-      return try run(
-        tool: tool,
-        prompt: prompt,
-        workingDirectory: workingDirectory,
-        imagePaths: imagePaths,
-        model: model,
-        reasoningEffort: reasoningEffort,
-        disableTools: disableTools,
-        claudeProfile: claudeProfile,
-        claudeSessionMode: claudeSessionMode,
-        codexResumeSessionId: codexResumeSessionId,
-        codexConfigOverrides: codexConfigOverrides,
-        processEnvironment: fallback.environment,
-        hasRetriedInvalidTransport: true,
-        hasRetriedExecutableResolution: hasRetriedExecutableResolution,
-        timeoutSeconds: timeoutSeconds
-      )
+    if process.terminationStatus != 0, tool == .codex, containsInvalidTransportError(stderr) {
+      throw NSError(
+        domain: "ChatCLI", code: -3,
+        userInfo: [NSLocalizedDescriptionKey: invalidCodexConfigMessage(stderr: stderr)])
     }
 
     if process.terminationStatus == 127
