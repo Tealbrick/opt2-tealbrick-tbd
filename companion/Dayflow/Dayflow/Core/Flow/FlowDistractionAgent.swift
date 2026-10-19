@@ -200,12 +200,15 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
 
   /// The switch or the model setup changed: look again at whether the observer may run.
   func reconfigure() {
-    guard let session else {
+    // The mirror knows the truth (a break, a pause, an ended session), not the snapshot stored at the start.
+    let current = mirror.snapshot
+    guard current.phase == .active || current.phase == .onBreak else {
+      session = nil
       halt()
       statusLine = idleStatus
       return
     }
-    start(with: session, rebrief: true)
+    start(with: current, rebrief: true)
   }
 
   /// Starts watching when the switch is on, a session runs and a route resolves. Says why when it does not.
@@ -217,8 +220,11 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
       fail(error.localizedDescription)
       return
     }
-    let directory = tempRoot.appendingPathComponent("TBDFlowObserver-\(UUID().uuidString)", isDirectory: true)
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    // Nothing from an earlier run (a crash, a force quit) stays in the temp folder.
+    Self.sweepLeftovers(in: tempRoot)
+    let directory = tempRoot.appendingPathComponent(Self.workDirectoryPrefix + UUID().uuidString, isDirectory: true)
+    try? FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     workDirectory = directory
     generation += 1
     let gen = generation
@@ -383,6 +389,8 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
     let askTimeline = forceTimelineUpdate || timeline.wantsUpdate(every: settings.timelineEverySeconds, at: now())
     forceTimelineUpdate = false
     let message = tickMessage(askTimeline: askTimeline)
+    // The goal list this check sends; the model's "g2" is read against THIS list, not a later one.
+    let sentGoals = goalTasks
     pendingNotes = []
     let history = transcript.suffix(6).map { $0.text }.joined(separator: "\n")
     let system =
@@ -405,32 +413,33 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
         height: height, quality: quality, timeout: timeout)
       self?.finishTick(
         generation: gen, reply: outcome.reply, error: outcome.error,
-        seconds: Date().timeIntervalSince(startedAt), front: front, askedTimeline: askTimeline)
+        seconds: Date().timeIntervalSince(startedAt), front: front, askedTimeline: askTimeline, sentGoals: sentGoals)
     }
     return task
   }
 
-  /// Capture, read, call. Off the main actor. The screenshot file is removed on every path; in text mode the image is
-  /// read by Vision and never sent.
+  /// Capture, read, call. Off the main actor. The capture lives in memory. Text mode reads it with Vision and never
+  /// writes it or sends it. Image mode writes one JPEG to `shotURL` for the call and removes it on every path.
   private nonisolated static func fetch(
     source: FlowScreenSource, client: TBDFlowModelCompleting, route: TBDFlowObserverRoute, system: String,
     message: String, shotURL: URL, height: Int, quality: Double, timeout: TimeInterval
   ) async -> (reply: String?, error: String?) {
     defer { try? FileManager.default.removeItem(at: shotURL) }
     do {
-      try await source.capture(to: shotURL, height: height, quality: quality)
+      let image = try await source.captureImage(height: height)
       var prompt = message
-      var image: Data?
+      var jpeg: Data?
       switch route.evidence {
       case .text:
-        let screenText = source.recognizeText(at: shotURL)
+        let screenText = source.recognizeText(in: image)
         prompt += "\nScreen text (Apple OCR of the current screenshot):\n\(screenText)\nReply with the JSON object only."
       case .image:
-        image = try Data(contentsOf: shotURL)
+        try source.writeJPEG(image, to: shotURL, quality: quality)
+        jpeg = try Data(contentsOf: shotURL)
         prompt += "\nScreenshot attached. Reply with the JSON object only."
       }
       let reply = try await client.complete(
-        system: system, userText: prompt, imageJPEG: image, config: route.config, timeout: timeout)
+        system: system, userText: prompt, imageJPEG: jpeg, config: route.config, timeout: timeout)
       return (reply, nil)
     } catch {
       return (nil, error.localizedDescription)
@@ -439,7 +448,7 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
 
   private func finishTick(
     generation gen: Int, reply: String?, error: String?, seconds: Double, front: FlowSessionTimeline.FrontApp,
-    askedTimeline: Bool
+    askedTimeline: Bool, sentGoals: [TBDFlowGoal]
   ) {
     guard gen == generation else { return }
     tickInFlight = false
@@ -479,7 +488,7 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
       $0.checks += 1
       if offTask { $0.offPlanChecks += 1 }
     }
-    handle(verdict: verdict, offTask: offTask)
+    handle(verdict: verdict, offTask: offTask, sentGoals: sentGoals)
     timeline.observe(offTask: offTask, front: front, reason: verdict.reason, at: now())
     if askedTimeline { readBackTimeline(objects) }
     refreshStatusAfterCheck()
@@ -507,17 +516,17 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
     appendTranscript("Timeline update: the model didn't leave a usable timeline.")
   }
 
-  private func handle(verdict: Verdict, offTask: Bool) {
+  private func handle(verdict: Verdict, offTask: Bool, sentGoals: [TBDFlowGoal]) {
     if offTask != lastReportedOffTask {
       lastReportedOffTask = offTask
       mirror.agentReportedFocusChange(isDistracted: offTask)
     }
 
-    // Goals the model saw finished: resolve g-ids, relay once each. FlowPlanner ticks them off (one entry point).
+    // Goals the model saw finished: resolve g-ids against the list that check sent, relay once each. FlowPlanner ticks them off (one entry point).
     let finished = (verdict.completed_goals ?? []).compactMap { short -> TBDFlowGoal? in
       let digits = short.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "g[] "))
-      guard let index = Int(digits), index >= 1, index <= goalTasks.count else { return nil }
-      let task = goalTasks[index - 1]
+      guard let index = Int(digits), index >= 1, index <= sentGoals.count else { return nil }
+      let task = sentGoals[index - 1]
       guard !reportedGoalIds.contains(task.id) else { return nil }
       return task
     }
@@ -807,6 +816,19 @@ final class FlowDistractionAgent: ObservableObject, FlowObserving {
       try? FileManager.default.removeItem(at: directory)
     }
     workDirectory = nil
+    Self.sweepLeftovers(in: tempRoot)
+  }
+
+  static let workDirectoryPrefix = "TBDFlowObserver-"
+
+  /// Removes every `TBDFlowObserver-*` folder in `root` (the observer's own screenshot folders, left by a run that did
+  /// not end cleanly). Called when the observer starts and when it stops.
+  static func sweepLeftovers(in root: URL) {
+    let fileManager = FileManager.default
+    guard let names = try? fileManager.contentsOfDirectory(atPath: root.path) else { return }
+    for name in names where name.hasPrefix(workDirectoryPrefix) {
+      try? fileManager.removeItem(at: root.appendingPathComponent(name, isDirectory: true))
+    }
   }
 
   /// Design shots only: shows a state the page has after some checks, without running any.

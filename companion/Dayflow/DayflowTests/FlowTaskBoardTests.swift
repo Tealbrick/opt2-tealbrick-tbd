@@ -12,6 +12,11 @@ final class FakeTaskBoardClient: FlowTaskBoardClient {
   var connected = true
   var listResult: Result<TBDFlowTaskBoardList, Error> = .success(TBDFlowTaskBoardList(available: true))
   var completion: Completion = .ok
+  /// The status the helper reports for a call that worked.
+  var completedStatus = "done"
+  /// While true, `list()` waits (a pending list call) until the test resumes `listWaiter`.
+  var holdList = false
+  var listWaiter: CheckedContinuation<Void, Never>?
   private(set) var accessCalls = 0
   private(set) var connectionCalls = 0
   private(set) var listCalls = 0
@@ -26,12 +31,16 @@ final class FakeTaskBoardClient: FlowTaskBoardClient {
 
   func access() async -> TBDAppAccess { accessCalls += 1; return accessValue }
   func agentConnected() async -> Bool { connectionCalls += 1; return connected }
-  func list() async throws -> TBDFlowTaskBoardList { listCalls += 1; return try listResult.get() }
+  func list() async throws -> TBDFlowTaskBoardList {
+    listCalls += 1
+    if holdList { await withCheckedContinuation { listWaiter = $0 } }
+    return try listResult.get()
+  }
 
   func complete(issue: String, result: String, onStatus: @escaping @MainActor (String) -> Void) async throws -> String {
     completeCalls.append((issue, result))
     switch completion {
-    case .ok: return "done"
+    case .ok: return completedStatus
     case .fail(let message): throw Failure(message: message)
     case .hold:
       onStatus("Waiting for owner approval")
@@ -344,5 +353,151 @@ final class FlowTaskBoardTests: FlowTestCase {
     XCTAssertEqual(board.issues.count, 2)
     _ = try await board.complete(issue: "iss_eyal", result: "x") { _ in }
     XCTAssertEqual(board.issues.map(\.id), ["iss_weekly"])
+  }
+
+  // MARK: The result text is frozen at the first tap (review 6)
+
+  func testARetryAfterAFailureSendsTheSameWordsEvenWhenTheMinutesChanged() async throws {
+    let store = makeStore()
+    let board = try boardTask(store)
+    clock.set("2026-10-05T10:00:00Z")
+    func card(_ start: String, _ end: String) -> TimelineCard {
+      TimelineCard(
+        recordId: 101, batchId: 1, startTimestamp: start, endTimestamp: end, category: "Work", subcategory: "", title: "Reply",
+        summary: "", detailedSummary: "", day: day, distractions: nil, videoSummaryURL: nil, otherVideoSummaryURLs: nil, appSites: nil)
+    }
+    try store.setCardLabel(cardID: "101", label: .onPlan, taskID: board.id, by: .person)
+    var cards = [card("9:00 AM", "9:45 AM")]
+    let planner = FlowPlanner(
+      store: store, mirror: mirror, defaults: defaults, calendar: Self.utc, now: { [clock] in clock.now }, playSound: {},
+      taskBoard: source(), cardsForDay: { _ in MainActor.assumeIsolated { cards } })
+    planner.load()
+    fake.completion = .fail("Task Board did not answer in time. Try again.")
+    await planner.completeOnTaskBoard(board)
+    XCTAssertEqual(fake.completeCalls.map(\.result), ["Done — tracked in TBD Flow, 45 min on plan"])
+    XCTAssertEqual(store.task(id: board.id)?.taskBoardResult, "Done — tracked in TBD Flow, 45 min on plan", "saved on the task")
+    // The timeline grows before the retry: the words must not change.
+    cards = [card("9:00 AM", "9:55 AM")]
+    fake.completion = .ok
+    await planner.completeOnTaskBoard(try XCTUnwrap(planner.tasks.first))
+    XCTAssertEqual(fake.completeCalls.map(\.result), Array(repeating: "Done — tracked in TBD Flow, 45 min on plan", count: 2))
+    // The frozen text survives a restart too.
+    XCTAssertEqual(makeStore().task(id: board.id)?.taskBoardResult, "Done — tracked in TBD Flow, 45 min on plan")
+  }
+
+  // MARK: Only "done" is done (review 7)
+
+  func testAnyStatusButDoneIsAnErrorOnTheRowAndTheTaskStaysOpen() async throws {
+    let store = makeStore()
+    let board = try boardTask(store)
+    let planner = makePlanner(store: store, taskBoard: source([eyal]))
+    await planner.taskBoard.recheck(force: true)
+    for status in ["in_review", "blocked", "todo", ""] {
+      fake.completedStatus = status
+      await planner.completeOnTaskBoard(board)
+      guard case .failed(let sentence)? = planner.taskBoardRows[board.id] else { return XCTFail("no error for \(status)") }
+      XCTAssertEqual(sentence, "Task Board did not mark it done. Check the issue on Task Board.")
+      XCTAssertEqual(planner.tasks.first?.status, .todo, "status \(status)")
+      XCTAssertEqual(planner.taskBoard.issues.map(\.id), ["iss_eyal"], "the issue stays in the sheet list")
+    }
+    fake.completedStatus = "done"
+    await planner.completeOnTaskBoard(board)
+    XCTAssertEqual(planner.tasks.first?.status, .done)
+  }
+
+  func testTheAppWaitsLongerThanTheHelperWorstCase() {
+    // Helper: relay open 30 s, initialize 30 s, list tools 30 s, first call 30 s, hold wait 600 s, second call 30 s,
+    // one read 30 s = 780 s.
+    let helperWorstCase = 30 * 6 + 600
+    XCTAssertEqual(helperWorstCase, 780)
+    XCTAssertGreaterThanOrEqual(TBDChatRuntime.accountCallTimeoutSeconds("flowTaskBoardComplete"), helperWorstCase + 20)
+    XCTAssertEqual(TBDChatRuntime.accountCallTimeoutSeconds("flowTaskBoardComplete"), 800)
+    XCTAssertEqual(TBDChatRuntime.accountCallTimeoutSeconds("awaitSignIn"), 660)
+    XCTAssertEqual(TBDChatRuntime.accountCallTimeoutSeconds("flowTaskBoardList"), 45)
+  }
+
+  // MARK: No background polling (review 9)
+
+  func testNothingAsksTheHelperWhileTheFlowPageIsNotVisible() async {
+    let board = source([eyal])
+    XCTAssertFalse(board.isPolling, "no timer before the page shows")
+    board.accountChanged()
+    board.visibleTimerFired()
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertEqual([fake.accessCalls, fake.connectionCalls, fake.listCalls], [0, 0, 0])
+  }
+
+  func testThePageAsksWhenItOpensEveryTenMinutesWhileVisibleAndStopsWhenItLeaves() async {
+    let board = source([eyal])
+    board.pageDidAppear()
+    XCTAssertTrue(board.isPolling)
+    await waitFor { fake.listCalls == 1 }
+    XCTAssertEqual(fake.listCalls, 1, "once on open")
+    XCTAssertEqual(board.mode, .taskBoard)
+    board.visibleTimerFired()
+    await waitFor { fake.listCalls == 2 }
+    XCTAssertEqual(fake.listCalls, 2, "the 10-minute tick while visible")
+    board.accountChanged()  // sign-in or workspace change while visible
+    await waitFor { fake.listCalls == 3 }
+    XCTAssertEqual(fake.listCalls, 3)
+    board.pageDidDisappear()
+    XCTAssertFalse(board.isPolling)
+    board.visibleTimerFired()
+    board.accountChanged()
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertEqual(fake.listCalls, 3, "a hidden page asks nothing")
+    // It shows again: it checks again (after the gap).
+    clock.advance(20)
+    board.pageDidAppear()
+    await waitFor { fake.listCalls == 4 }
+    XCTAssertEqual(fake.listCalls, 4)
+    board.pageDidDisappear()
+  }
+
+  func testNothingStartsWhileAListCallIsPending() async {
+    let board = source([eyal])
+    fake.holdList = true
+    board.pageDidAppear()
+    await waitFor { fake.listWaiter != nil }
+    XCTAssertEqual(fake.listCalls, 1)
+    board.visibleTimerFired()
+    board.accountChanged()
+    board.pageDidAppear()
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertEqual(fake.listCalls, 1, "the pending call is the only one")
+    fake.holdList = false
+    fake.listWaiter?.resume()
+    fake.listWaiter = nil
+    await waitFor { board.mode == .taskBoard }
+    XCTAssertEqual(board.mode, .taskBoard)
+    board.pageDidDisappear()
+  }
+
+  func testAHeldListIsNotAskedAgainByTheTimer() async {
+    let board = source()
+    fake.listResult = .failure(FakeTaskBoardClient.Failure(message: TBDFlowSource.listWaitingNotice))
+    board.pageDidAppear()
+    await waitFor { fake.listCalls == 1 }
+    await waitFor { board.mode == .local(.failed(TBDFlowSource.listWaitingNotice)) }
+    XCTAssertEqual(board.mode, .local(.failed(TBDFlowSource.listWaitingNotice)))
+    board.visibleTimerFired()
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertEqual(fake.listCalls, 1, "the owner has not approved yet: the timer waits")
+    // The owner approved; the person changes the workspace or comes back to the page.
+    fake.listResult = .success(TBDFlowTaskBoardList(available: true, issues: [eyal]))
+    board.accountChanged()
+    await waitFor { fake.listCalls == 2 }
+    await waitFor { board.mode == .taskBoard }
+    XCTAssertEqual(board.mode, .taskBoard)
+    board.pageDidDisappear()
+  }
+
+  func testASeededSourceNeverPollsOnPageOpen() async {
+    let board = source()
+    board.seed(mode: .taskBoard, issues: [eyal])
+    board.pageDidAppear()
+    XCTAssertFalse(board.isPolling)
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertEqual([fake.accessCalls, fake.connectionCalls, fake.listCalls], [0, 0, 0])
   }
 }

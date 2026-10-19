@@ -157,9 +157,11 @@ final class FlowDayModel: ObservableObject {
   /// Reads the cards and the labels and publishes the result.
   func refresh() {
     let current = planner.currentTime
-    let tasks = planner.planTasks(forDay: planner.todayKey)
+    // The plan of the Companion day (4 AM to 4 AM), the same day the cards come from.
+    let tasks = planner.planTasks(forDay: planner.companionDayKey)
+    let cards = planner.timelineEvidence()  // first: it may move labels to rebuilt cards
     let next = Self.snapshot(
-      cards: planner.timelineEvidence(), tasks: tasks, labels: planner.store.cardLabels, now: current)
+      cards: cards, tasks: tasks, labels: planner.store.cardLabels, now: current, day: planner.companionDayRange)
     if next != snapshot { snapshot = next }
     if self.tasks != tasks { self.tasks = tasks }
     let source = sourceText()
@@ -170,8 +172,14 @@ final class FlowDayModel: ObservableObject {
 
   /// The day for `cards` (all cards of the Companion day), `tasks` (today's, not cancelled) and the stored `labels`.
   /// Only finished cards (ended by `now`) count. Same numbers as `TBDFlowMatcher.minutesPerTask` / `totals`.
+  ///
+  /// Minutes are summed on the same pieces the strip draws: each card is cut to the plan window (the first start to the last
+  /// end) and to `day` (the Companion day, 4 AM to 4 AM), and a card that overlaps the one before counts only from where
+  /// that one ended. So the totals, the minutes per task and the strip always agree. A card wholly outside the plan has no
+  /// label; its full length is "outside the plan".
   static func snapshot(
-    cards allCards: [TBDFlowCardEvidence], tasks: [TBDFlowTask], labels: [String: TBDFlowCardLabel], now: Date
+    cards allCards: [TBDFlowCardEvidence], tasks: [TBDFlowTask], labels: [String: TBDFlowCardLabel], now: Date,
+    day: (start: Date, end: Date)? = nil
   ) -> FlowDaySnapshot {
     var out = FlowDaySnapshot()
     out.hasPlan = !tasks.isEmpty
@@ -181,20 +189,53 @@ final class FlowDayModel: ObservableObject {
       let label = TBDFlowMatcher.effectiveLabel(for: card, stored: labels, tasks: tasks, at: now)
       return FlowDayCard(evidence: card, label: label, taskTitle: label?.taskID.flatMap { titles[$0] })
     }
-    out.minutesPerTask = TBDFlowMatcher.minutesPerTask(labels: labels, cards: finished, tasks: tasks)
-    out.totals = TBDFlowMatcher.totals(labels: labels, cards: finished, tasks: tasks)
+    let starts = tasks.compactMap(\.startAt)
+    let ends = tasks.compactMap { $0.endAt ?? $0.startAt }
+    var window: (start: Date, end: Date)? = day
+    if let first = starts.min(), let last = ends.max(), last > first {
+      window = (max(first, day?.start ?? first), min(last, day?.end ?? last))
+    }
+    var onPlanMinutes: [String: Double] = [:]
+    var totals = TBDFlowTotals()
+    let minutes = countedMinutes(cards: out.cards, window: window)
+    for card in out.cards {
+      let counted = card.kind == .outside ? card.minutes : (minutes[card.id] ?? 0)
+      switch card.kind {
+      case .onPlan:
+        totals.onPlanMinutes += counted
+        if let id = card.label?.taskID { onPlanMinutes[id, default: 0] += counted }
+      case .offPlan: totals.offPlanMinutes += counted
+      case .rest: totals.restMinutes += counted
+      case .outside, .notTracked: totals.outsideMinutes += counted
+      }
+    }
+    out.minutesPerTask = onPlanMinutes
+    out.totals = totals
     out.topOffPlan = Array(
       out.cards.filter { $0.kind == .offPlan }
         .sorted { ($0.minutes, $1.evidence.start) > ($1.minutes, $0.evidence.start) }
         .prefix(topOffPlanCount))
-    let starts = tasks.compactMap(\.startAt)
-    let ends = tasks.compactMap { $0.endAt ?? $0.startAt }
     if let first = starts.min(), let last = ends.max(), last > first {
       out.planStart = first
       out.planEnd = last
-      out.segments = segments(cards: out.cards, from: first, to: last)
+      out.segments = segments(cards: out.cards, from: window?.start ?? first, to: window?.end ?? last)
     }
     return out
+  }
+
+  /// Minutes each card counts: the card cut to `window` and to the end of the card before it (cards in order). nil window =
+  /// no cut except the overlap rule.
+  static func countedMinutes(cards: [FlowDayCard], window: (start: Date, end: Date)?) -> [String: Double] {
+    var counted: [String: Double] = [:]
+    var cursor = window?.start ?? .distantPast
+    for card in cards {
+      let from = max(card.evidence.start, cursor)
+      let to = min(card.evidence.end, window?.end ?? .distantFuture)
+      guard to > from else { continue }
+      counted[card.id] = to.timeIntervalSince(from) / 60
+      cursor = to
+    }
+    return counted
   }
 
   /// The strip: the cards cut to [start, end], in order, with a "not tracked" piece for every gap and for the tail.
@@ -300,11 +341,16 @@ final class FlowDayModel: ObservableObject {
     switch choice.action {
     case .onPlan(let taskID):
       let title = tasks.first { $0.id == taskID }?.title ?? "a task"
-      planner.correctCard(card.id, label: .onPlan, taskID: taskID, note: "The person says \(range) was on plan: \(title).")
+      planner.correctCard(
+        card.id, label: .onPlan, taskID: taskID, note: "The person says \(range) was on plan: \(title).",
+        cardStart: card.evidence.start, cardEnd: card.evidence.end)
     case .offPlan:
-      planner.correctCard(card.id, label: .offPlan, taskID: nil, note: "The person says \(range) was off plan.")
+      planner.correctCard(
+        card.id, label: .offPlan, taskID: nil, note: "The person says \(range) was off plan.",
+        cardStart: card.evidence.start, cardEnd: card.evidence.end)
     case .rest:
-      planner.correctCard(card.id, label: .rest, taskID: nil, note: nil)
+      planner.correctCard(
+        card.id, label: .rest, taskID: nil, note: nil, cardStart: card.evidence.start, cardEnd: card.evidence.end)
     case .clear:
       planner.clearCardCorrection(card.id)
     }

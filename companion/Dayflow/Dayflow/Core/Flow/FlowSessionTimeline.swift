@@ -188,12 +188,28 @@ final class FlowSessionTimeline: ObservableObject {
   /// doesn't stop a tick short. No model turn — we show what we have.
   func finish(at now: Date = Date()) {
     endBreak(at: now)
+    trimObservations(at: now)
     guard var last = entries.last, last.endedAt < now,
       now.timeIntervalSince(last.endedAt) < 15 * 60
-    else { return }
+    else {
+      save()
+      return
+    }
     last.endedAt = now
     entries[entries.count - 1] = last
     save()
+  }
+
+  /// At the end of a session the file keeps only this session's checks, and only today's short check notes (the reasons):
+  /// a check from before the session is dropped, and a reason from before today is cleared. The entries stay as they are.
+  private func trimObservations(at now: Date) {
+    let startOfToday = Calendar.current.startOfDay(for: now)
+    observations = observations.filter { $0.at >= sessionStartedAt }.map { observation in
+      guard observation.at < startOfToday, observation.reason != nil else { return observation }
+      var kept = observation
+      kept.reason = nil
+      return kept
+    }
   }
 
   func clear() {
@@ -402,11 +418,17 @@ final class FlowSessionTimeline: ObservableObject {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     guard let data = try? encoder.encode(file) else { return }
     let directory = fileURL.deletingLastPathComponent()
-    if !FileManager.default.fileExists(atPath: directory.path) {
-      try? FileManager.default.createDirectory(
+    let fileManager = FileManager.default
+    if !fileManager.fileExists(atPath: directory.path) {
+      try? fileManager.createDirectory(
         at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
-    try? data.write(to: fileURL, options: .atomic)
+    // Mode 0600 from the first byte: a temp file with that mode, then a rename over the old file.
+    let temp = directory.appendingPathComponent(".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp")
+    guard fileManager.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
+    if rename(temp.path, fileURL.path) != 0 {
+      try? fileManager.removeItem(at: temp)  // our own temp file
+    }
   }
 
   private func load() -> File? {

@@ -169,4 +169,92 @@ final class FlowSessionMirrorTests: FlowTestCase {
     XCTAssertTrue(none.observer is FlowNoObserver)
     XCTAssertEqual(none.observer.status, "Observer: not set up yet")
   }
+
+  // MARK: Toasts wait for the nudge, the tub and the "Time's up" bubble (review 5)
+
+  func testAToastDoesNotReplaceANudgeAndShowsWhenTheNudgeIsGone() {
+    mirror.apply(snapshot(.active))
+    mirror.simulateDistraction()
+    let nudge = mirror.overlay
+    mirror.toast("Start: Write report")
+    XCTAssertEqual(mirror.overlay, nudge, "the nudge stays")
+    XCTAssertEqual(mirror.queuedToastMessages, ["Start: Write report"])
+    mirror.agentReportedFocusChange(isDistracted: false)  // the nudge goes
+    XCTAssertEqual(mirror.overlay, .toast(message: "Start: Write report"))
+    XCTAssertEqual(mirror.queuedToastMessages, [])
+  }
+
+  func testAToastDoesNotReplaceTheTubOrTheEndedBubble() {
+    mirror.apply(snapshot(.active))
+    mirror.apply(snapshot(.onBreak, breakEndsAt: "09:40:00Z"))
+    XCTAssertEqual(mirror.overlay, .onBreak)
+    mirror.toast("Reminder one")
+    XCTAssertEqual(mirror.overlay, .onBreak)
+    mirror.debugHideOverlay()
+    XCTAssertEqual(mirror.overlay, .toast(message: "Reminder one"))
+
+    mirror.apply(snapshot(.active))  // the break is over
+    clock.set("2026-10-05T10:30:01Z")
+    mirror.handleDeadline()
+    XCTAssertEqual(mirror.overlay, .sessionEnded)
+    mirror.toast("Reminder two")
+    XCTAssertEqual(mirror.overlay, .sessionEnded, "the Time's up bubble stays until the person answers")
+    mirror.dismissOverlay()
+    XCTAssertEqual(mirror.overlay, .toast(message: "Reminder two"))
+  }
+
+  func testQueuedToastsAreFirstInFirstOutAtMostThreeAndNotRepeated() {
+    mirror.apply(snapshot(.active))
+    mirror.simulateDistraction()
+    for text in ["A", "B", "B", "C", "D", "E"] { mirror.toast(text) }
+    XCTAssertEqual(mirror.queuedToastMessages, ["C", "D", "E"], "three at most; the oldest go; a repeat is queued once")
+    mirror.agentReportedFocusChange(isDistracted: false)
+    XCTAssertEqual(mirror.overlay, .toast(message: "C"))
+    mirror.dismissOverlay()
+    XCTAssertEqual(mirror.overlay, .toast(message: "D"), "the next one follows in order")
+    mirror.dismissOverlay()
+    XCTAssertEqual(mirror.overlay, .toast(message: "E"))
+    mirror.dismissOverlay()
+    XCTAssertEqual(mirror.overlay, .hidden)
+  }
+
+  func testAnAnswerToTheNudgeStillReplacesIt() {
+    mirror.apply(snapshot(.active))
+    mirror.simulateDistraction()
+    mirror.respondBackToWork()
+    XCTAssertEqual(mirror.overlay, .toast(message: "Nice! Keep at it"))
+  }
+
+  func testNewSessionReplacesTheEndedBubble() {
+    mirror.apply(snapshot(.active))
+    clock.set("2026-10-05T10:30:01Z")
+    mirror.handleDeadline()
+    XCTAssertEqual(mirror.overlay, .sessionEnded)
+    mirror.apply(snapshot(.active, endsAt: "12:00:00Z"))
+    XCTAssertEqual(mirror.overlay, .toast(message: "Your flow session starts now!"))
+  }
+
+  func testAGoalsChangeDuringABreakDoesNotShowTheTubAgainOrPauseTwice() {
+    mirror.apply(snapshot(.active))
+    mirror.apply(snapshot(.onBreak, breakEndsAt: "09:40:00Z"))
+    mirror.debugHideOverlay()  // the tub went away by itself
+    XCTAssertEqual(observer.events, ["start", "pause"])
+    var changed = snapshot(.onBreak, breakEndsAt: "09:40:00Z")
+    changed.goals = [TBDFlowGoal(id: "t1", title: "Write report"), TBDFlowGoal(id: "t2", title: "Call Anna")]
+    mirror.apply(changed)
+    XCTAssertEqual(mirror.overlay, .hidden, "no second tub")
+    XCTAssertEqual(observer.events, ["start", "pause", "goals"], "the observer gets the goals and no second pause")
+  }
+
+  // MARK: Relaunch during a break (review 14)
+
+  func testRelaunchDuringABreakHandsTheObserverThePausedSession() {
+    mirror.apply(snapshot(.active))
+    mirror.apply(snapshot(.onBreak, breakEndsAt: "09:40:00Z"))
+    let relaunched = makeMirror()  // restores the persisted break
+    XCTAssertEqual(relaunched.snapshot.phase, .onBreak)
+    let fresh = RecordingObserver()
+    relaunched.setObserver(fresh)
+    XCTAssertEqual(fresh.events, ["start(rebrief)"], "the observer is given the session (it starts paused from the phase)")
+  }
 }

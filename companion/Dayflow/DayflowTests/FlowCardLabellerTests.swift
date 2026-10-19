@@ -190,12 +190,70 @@ final class FlowCardLabellerTests: FlowObserverTestCase {
     ran = await labeller.run()
     XCTAssertEqual(ran, 0)
     XCTAssertEqual(model.calls.count, 0)
-    // With the choice it runs.
+    // With the choice but with the observer switch off: still no call (card and task titles would leave this Mac).
     try setup.chooseCloud(connectionID: connection.id, model: "claude-test")
+    XCTAssertFalse(setup.watching)
+    ran = await labeller.run()
+    XCTAssertEqual(ran, 0)
+    XCTAssertEqual(model.calls.count, 0)
+    XCTAssertEqual(labeller.lastRunSummary, "The cloud model gets nothing while \"Watch my screen for focus\" is off.")
+    // With the choice and the switch on it runs.
+    setup.watching = true
     model.queue(#"{"label":"off_plan","task":null}"#)
     ran = await labeller.run()
     XCTAssertEqual(ran, 1)
     XCTAssertEqual(model.calls.first?.config.baseURL.host, "api.anthropic.com")
+    // The switch goes off again: the next run asks nothing.
+    setup.watching = false
+    cards = [card(102, "Another card", "8:45 AM", "9:00 AM")]
+    ran = await labeller.run()
+    XCTAssertEqual(ran, 0)
+    XCTAssertEqual(model.calls.count, 1)
+  }
+
+  func testALocalRouteStillRunsWithTheSwitchOff() async throws {
+    try setup.chooseLocal(.textLocal, model: "llama3.2:3b")
+    XCTAssertFalse(setup.watching)
+    cards = [card(101, "Drafting the quarterly report", "8:00 AM", "8:40 AM")]
+    model.queue(#"{"label":"on_plan","task":"g1"}"#)
+    let stored = await labeller.run()
+    XCTAssertEqual(stored, 1, "a local route does not need the screen switch")
+  }
+
+  func testACardOutsideThePlanIsNeverSentAndNeverLabelled() async throws {
+    try setup.chooseLocal(.textLocal, model: "llama3.2:3b")
+    // The plan runs 8:00 to 11:30. One card is before it, one after it, one inside.
+    clock.set("2026-10-05T14:00:00Z")
+    cards = [
+      card(101, "BEFORE-MARKER early mail", "6:00 AM", "6:30 AM"),
+      card(102, "INSIDE-MARKER drafting the report", "9:00 AM", "9:30 AM"),
+      card(103, "AFTER-MARKER evening video", "12:00 PM", "12:30 PM"),
+    ]
+    model.queue(#"{"label":"on_plan","task":"g1"}"#)
+    let stored = await labeller.run()
+    XCTAssertEqual(stored, 1)
+    XCTAssertEqual(model.calls.count, 1, "one call: only the card inside the plan")
+    let text = try XCTUnwrap(model.calls.first).userText
+    XCTAssertTrue(text.contains("INSIDE-MARKER"))
+    XCTAssertFalse(text.contains("BEFORE-MARKER"))
+    XCTAssertFalse(text.contains("AFTER-MARKER"))
+    XCTAssertEqual(Set(store.cardLabels.keys), ["102"], "no label for a card outside the plan")
+  }
+
+  func testALabelKeepsItsCardWhenCompanionRebuildsItWithANewId() async throws {
+    try setup.chooseLocal(.textLocal, model: "llama3.2:3b")
+    cards = [card(101, "Drafting the quarterly report", "8:00 AM", "8:40 AM")]
+    model.queue(#"{"label":"on_plan","task":"g1"}"#)
+    _ = await labeller.run()
+    XCTAssertEqual(store.cardLabels["101"]?.start, at("08:00:00Z"), "the label stores its card's span")
+    XCTAssertEqual(store.cardLabels["101"]?.end, at("08:40:00Z"))
+    // Companion rebuilt the card: new record id, same time.
+    cards = [card(555, "Drafting the quarterly report", "8:00 AM", "8:40 AM")]
+    let again = await labeller.run()
+    XCTAssertEqual(again, 0, "no second call: the label moved to the new card")
+    XCTAssertEqual(model.calls.count, 1)
+    XCTAssertNil(store.cardLabels["101"])
+    XCTAssertEqual(store.cardLabels["555"]?.label, .onPlan)
   }
 
   func testNoPlanMeansNoCall() async throws {

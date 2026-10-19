@@ -33,6 +33,7 @@ struct FlowTodayView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: TBDKit.s5) {
+      if let text = planner.storeNotice { TBDNotice(text, tone: .needsYou) }
       sourceNotice
       if !plan.isEmpty { FlowDayStripCard(model: dayModel) }
       ForEach(planner.reminders) { reminderRow($0) }

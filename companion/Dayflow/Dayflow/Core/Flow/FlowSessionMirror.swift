@@ -78,17 +78,18 @@ final class FlowSessionMirror: ObservableObject {
     }
     snapshot = restored
     armDeadlineTimer()
-    if restored.phase == .active {
-      // Relaunched mid-session: start a fresh observation with the same session facts.
+    if restored.phase == .active || restored.phase == .onBreak {
+      // Relaunched mid-session (or mid-break: the observer starts paused): a fresh observation with the same session facts.
       self.observer.start(with: restored, rebrief: true)
     }
   }
 
-  /// Slice F3: plug in the real observer. A session already running is handed over (as a relaunch).
+  /// Slice F3: plug in the real observer. A session already running is handed over (as a relaunch). A session on a
+  /// break is handed over too: the observer takes it in paused state, so `resume()` works when the break ends.
   func setObserver(_ newObserver: FlowObserving) {
     observer.stop()
     observer = newObserver
-    if snapshot.phase == .active { newObserver.start(with: snapshot, rebrief: true) }
+    if snapshot.phase == .active || snapshot.phase == .onBreak { newObserver.start(with: snapshot, rebrief: true) }
   }
 
   // MARK: - Updates from the planner
@@ -103,13 +104,18 @@ final class FlowSessionMirror: ObservableObject {
       isDistracted = false
       snoozeUntil = nil
       nudgeStreak = 0
+      // A new session replaces the "Time's up" bubble of the old one.
+      if overlay == .sessionEnded { hideOverlay() }
       showToast(String(localized: "Your flow session starts now!"))
       observer.start(with: newSnapshot, rebrief: false)
+    case (.onBreak, .onBreak):
+      // Tasks added or checked off during a break: the tub does not come back, the observer stays paused.
+      observer.goalsChanged(to: newSnapshot)
     case (_, .onBreak):
       showBreak()
       observer.pause()
     case (.onBreak, .active):
-      breakOverlayTimer?.invalidate()
+      endBreakOverlay()
       showToast(String(localized: "Break's over. Back to it!"))
       observer.resume()
       observer.goalsChanged(to: newSnapshot)
@@ -122,7 +128,7 @@ final class FlowSessionMirror: ObservableObject {
       timeline.finish(at: now())
       observer.stop()
       if case (_, .idle) = (previous.phase, newSnapshot.phase) {
-        overlay = .hidden
+        hideOverlay()
       }
     default:
       break
@@ -157,11 +163,11 @@ final class FlowSessionMirror: ObservableObject {
   /// A toast with arbitrary text (reminders, finished timers, the nudge preview).
   func toast(_ message: String) { showToast(message) }
 
-  /// Nudge preview: a toast with arbitrary text.
-  func debugToast(_ message: String) { showToast(message) }
+  /// Nudge preview: a toast with arbitrary text. It replaces whatever is on screen.
+  func debugToast(_ message: String) { showToast(message, replacing: true) }
 
   /// Nudge preview: dismiss whatever is on screen (plays the exit clip).
-  func debugHideOverlay() { overlay = .hidden }
+  func debugHideOverlay() { hideOverlay() }
 
   /// Fires the distraction nudge as if the observer had flagged the user. Quiet mode records nothing visible.
   func simulateDistraction() {
@@ -184,7 +190,7 @@ final class FlowSessionMirror: ObservableObject {
     isDistracted = distracted
     if !distracted { nudgeStreak = 0 }
     if !distracted, case .nudge = overlay {
-      overlay = .hidden
+      hideOverlay()
     }
   }
 
@@ -228,7 +234,8 @@ final class FlowSessionMirror: ObservableObject {
     snoozeUntil = nil
     nudgeStreak = 0
     observer.noteUserEvent("The user tapped \"I'll get back to work\" on your nudge.", markRefocused: true)
-    showToast(String(localized: "Nice! Keep at it"))
+    // The person answered the nudge: this toast takes the nudge's place (the layout stays).
+    showToast(String(localized: "Nice! Keep at it"), replacing: true)
   }
 
   func snooze(minutes: Int) {
@@ -238,7 +245,7 @@ final class FlowSessionMirror: ObservableObject {
     observer.noteUserEvent(
       "The user snoozed your nudge for \(minutes) minutes. Do not nudge again until the snooze is over unless they switch to something new.",
       markRefocused: false)
-    overlay = .hidden
+    hideOverlay()
     armDeadlineTimer()
   }
 
@@ -252,16 +259,16 @@ final class FlowSessionMirror: ObservableObject {
     observer.noteUserEvent(
       "The user says your nudge was a mistake — they were on task. Trust them, and be more lenient about screens like the one that triggered it.",
       markRefocused: true)
-    overlay = .hidden
+    hideOverlay()
   }
 
   func dismissOverlay() {
-    overlay = .hidden
+    hideOverlay()
   }
 
   /// "Start a new session" from the session-ended bubble: bring up the app on the Flow page.
   func openFlowTab() {
-    overlay = .hidden
+    hideOverlay()
     MainWindowController.shared.showMainWindow()
     NSApp.activate(ignoringOtherApps: true)
     NotificationCenter.default.post(name: .navigateToFlow, object: nil)
@@ -323,7 +330,7 @@ final class FlowSessionMirror: ObservableObject {
       snapshot.phase = .active
       snapshot.breakEndsAt = nil
       snapshot.persist(defaults: defaults)
-      breakOverlayTimer?.invalidate()
+      endBreakOverlay()
       showToast(String(localized: "Break's over. Back to it!"))
     }
 
@@ -332,7 +339,33 @@ final class FlowSessionMirror: ObservableObject {
 
   // MARK: - Toasts
 
-  private func showToast(_ message: String, seconds: TimeInterval? = nil) {
+  /// At most this many toasts wait behind a nudge, the tub or the "Time's up" bubble.
+  static let maxQueuedToasts = 3
+  private var queuedToasts: [(message: String, seconds: TimeInterval?)] = []
+
+  /// The messages waiting for the overlay (oldest first), for tests.
+  var queuedToastMessages: [String] { queuedToasts.map(\.message) }
+
+  /// A toast does not replace a nudge, the break tub or the "Time's up" bubble: it waits in a queue (first in, first out,
+  /// at most `maxQueuedToasts`; the oldest goes when it is full; the same text is queued once) and shows when the
+  /// overlay is hidden again. `replacing` is for the answer to a nudge and for the preview.
+  private func showToast(_ message: String, seconds: TimeInterval? = nil, replacing: Bool = false) {
+    if !replacing {
+      switch overlay {
+      case .nudge, .onBreak, .sessionEnded:
+        if !queuedToasts.contains(where: { $0.message == message }) {
+          queuedToasts.append((message, seconds))
+          if queuedToasts.count > Self.maxQueuedToasts { queuedToasts.removeFirst(queuedToasts.count - Self.maxQueuedToasts) }
+        }
+        return
+      case .hidden, .toast:
+        break
+      }
+    }
+    presentToast(message, seconds: seconds)
+  }
+
+  private func presentToast(_ message: String, seconds: TimeInterval?) {
     let seconds = seconds ?? settings.toastSeconds
     overlay = .toast(message: message)
     toastTimer?.invalidate()
@@ -340,10 +373,25 @@ final class FlowSessionMirror: ObservableObject {
       MainActor.assumeIsolated {
         guard let self else { return }
         if case .toast = self.overlay {
-          self.overlay = .hidden
+          self.hideOverlay()
         }
       }
     }
+  }
+
+  /// Hides the overlay and shows the next waiting toast, if any.
+  private func hideOverlay() {
+    overlay = .hidden
+    if !queuedToasts.isEmpty {
+      let next = queuedToasts.removeFirst()
+      presentToast(next.message, seconds: next.seconds)
+    }
+  }
+
+  /// The break is over: the tub goes (the timer that would hide it is cancelled) and waiting toasts may show.
+  private func endBreakOverlay() {
+    breakOverlayTimer?.invalidate()
+    if overlay == .onBreak { hideOverlay() }
   }
 
   // MARK: - Break
@@ -360,7 +408,7 @@ final class FlowSessionMirror: ObservableObject {
       MainActor.assumeIsolated {
         guard let self else { return }
         if self.overlay == .onBreak {
-          self.overlay = .hidden
+          self.hideOverlay()
         }
       }
     }

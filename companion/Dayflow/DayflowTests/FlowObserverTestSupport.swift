@@ -1,9 +1,11 @@
+import CoreGraphics
 import XCTest
 import TBDModels
 
 @testable import TBD
 
-/// A screen source that never touches ScreenCaptureKit or Vision: it writes bytes to the file and returns canned text.
+/// A screen source that never touches ScreenCaptureKit or Vision: the capture is a 1x1 image in memory, the text is canned,
+/// and `writeJPEG` (image mode only) writes fixed bytes to the file it is given.
 final class FakeScreenSource: FlowScreenSource, @unchecked Sendable {
   static let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02, 0x03])
   private let lock = NSLock()
@@ -15,17 +17,26 @@ final class FakeScreenSource: FlowScreenSource, @unchecked Sendable {
 
   var captures: Int { lock.lock(); defer { lock.unlock() }; return _captures }
   var recognitions: Int { lock.lock(); defer { lock.unlock() }; return _recognitions }
+  /// Every file `writeJPEG` was asked to write (empty in text mode: nothing is written).
   var urls: [URL] { lock.lock(); defer { lock.unlock() }; return _urls }
 
-  func capture(to url: URL, height: Int, quality: Double) async throws {
-    lock.lock(); _captures += 1; _urls.append(url); let failure = self.failure; lock.unlock()
+  func captureImage(height: Int) async throws -> CGImage {
+    lock.lock(); _captures += 1; let failure = self.failure; lock.unlock()
     if let failure { throw failure }
-    try Self.jpeg.write(to: url)
+    let context = CGContext(
+      data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    return context.makeImage()!
   }
 
-  func recognizeText(at url: URL) -> String {
+  func recognizeText(in image: CGImage) -> String {
     lock.lock(); _recognitions += 1; lock.unlock()
     return text
+  }
+
+  func writeJPEG(_ image: CGImage, to url: URL, quality: Double) throws {
+    lock.lock(); _urls.append(url); lock.unlock()
+    try Self.jpeg.write(to: url)
   }
 }
 

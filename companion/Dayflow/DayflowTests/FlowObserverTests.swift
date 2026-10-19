@@ -103,17 +103,53 @@ final class FlowObserverTests: FlowObserverTestCase {
     XCTAssertTrue(call.system.contains("a screenshot of their screen"))
   }
 
-  func testTheScreenshotFileIsRemovedAfterEachCheckAndTheFolderOnStop() async throws {
-    try turnOn()
+  func testTextModeWritesNoFileAtAll() async throws {
+    try turnOn(.textLocal)
     await startSession()
     let directory = try XCTUnwrap(agent.workDirectoryForTests)
-    XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
-    await check()
-    XCTAssertEqual(screen.urls.count, 1)
-    XCTAssertEqual(files(in: directory), [], "the shot is gone after the check")
+    // While the model call runs, nothing is on disk: the OCR reads the image in memory.
+    let first = agent.tick()
+    XCTAssertEqual(files(in: directory), [], "no JPEG in text mode")
+    await first?.value
+    XCTAssertEqual(screen.captures, 1)
+    XCTAssertEqual(screen.recognitions, 1)
+    XCTAssertEqual(screen.urls, [], "text mode never asks for a JPEG file")
+    XCTAssertEqual(files(in: directory), [])
     agent.stop()
     XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     XCTAssertNil(agent.workDirectoryForTests)
+  }
+
+  func testImageModeKeepsTheTempFileOnlyForTheCallAndRemovesItAfter() async throws {
+    try turnOn(.visionLocal, modelName: "qwen2.5vl:3b")
+    await startSession()
+    let directory = try XCTUnwrap(agent.workDirectoryForTests)
+    await check()
+    XCTAssertEqual(screen.urls.count, 1)
+    XCTAssertEqual(screen.urls.first?.deletingLastPathComponent().path, directory.path)
+    XCTAssertEqual(files(in: directory), [], "the shot is gone after the check")
+    agent.stop()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+  }
+
+  func testLeftoverObserverFoldersAreSweptAtStartAndAtStop() async throws {
+    try turnOn(.visionLocal, modelName: "qwen2.5vl:3b")
+    func leftover(_ name: String) throws -> URL {
+      let url = folder.appendingPathComponent("TBDFlowObserver-\(name)", isDirectory: true)
+      try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+      try Data("old shot".utf8).write(to: url.appendingPathComponent("shot-1.jpg"))
+      return url
+    }
+    let other = folder.appendingPathComponent("KeepMe", isDirectory: true)
+    try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+    let crashed = try leftover("from-a-crash")
+    await startSession()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: crashed.path), "swept at start")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: other.path), "other folders stay")
+    let late = try leftover("made-while-running")
+    agent.stop()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: late.path), "swept at stop")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: other.path))
   }
 
   func testTheScreenshotFileIsRemovedAfterAFailedCheckToo() async throws {
@@ -423,5 +459,111 @@ final class FlowObserverTests: FlowObserverTestCase {
     planner.refresh()
     XCTAssertEqual(mirror.snapshot.alertStyle, .feisty)
     XCTAssertEqual(FlowAgentSettings(defaults: defaults).alertStyle, .feisty)
+  }
+
+  // MARK: Goal ids belong to the list that check sent (review 11)
+
+  func testCompletedGoalsAreReadAgainstTheListThatCheckSent() async throws {
+    try turnOn()
+    var completed: [[String]] = []
+    mirror.onGoalsCompleted = { completed.append($0.map(\.id)) }
+    await startSession()  // the list is [t1 "Write report"]: g1 = t1
+    model.queue(#"{"status":"on_task","action":"none","completed_goals":["g1"]}"#)
+    let inFlight = agent.tick()
+    // While the call runs, a task is added in front: now g1 would mean something else.
+    var changed = snapshot(.active)
+    changed.goals = [TBDFlowGoal(id: "t0", title: "Call Anna"), TBDFlowGoal(id: "t1", title: "Write report")]
+    agent.goalsChanged(to: changed)
+    await inFlight?.value
+    XCTAssertEqual(completed, [["t1"]], "g1 of THAT check is t1, not the task that moved to the top")
+  }
+
+  // MARK: reconfigure follows the mirror (review 13)
+
+  func testReconfigureRestartsFromTheMirrorSoABreakStaysPaused() async throws {
+    try turnOn()
+    await startSession()
+    XCTAssertEqual(agent.status, "Observer: waits for the first check")
+    mirror.apply(snapshot(.onBreak, breakEndsAt: "09:40:00Z"))  // the agent was not told: the stored session is still active
+    agent.reconfigure()
+    await agent.startTask?.value
+    XCTAssertEqual(agent.status, "Observer: paused for your break")
+    XCTAssertNil(agent.tick(), "no check during the break")
+    XCTAssertEqual(screen.captures, 0)
+  }
+
+  func testReconfigureWithNoLiveSessionInTheMirrorStopsTheObserver() async throws {
+    try turnOn()
+    await startSession()
+    mirror.apply(.idle)
+    agent.reconfigure()
+    XCTAssertFalse(agent.isRunning)
+    XCTAssertEqual(agent.status, "Observer: waits for a session")
+    XCTAssertNil(agent.tick())
+  }
+
+  // MARK: Relaunch during a break (review 14)
+
+  func testAnObserverHandedABreakSessionResumesAfterTheBreak() async throws {
+    try turnOn()
+    mirror.apply(snapshot(.active))
+    mirror.apply(snapshot(.onBreak, breakEndsAt: "09:40:00Z"))
+    // Relaunch: a new mirror restores the break and the real observer is plugged in.
+    let relaunched = makeMirror()
+    XCTAssertEqual(relaunched.snapshot.phase, .onBreak)
+    relaunched.setObserver(agent)
+    await agent.startTask?.value
+    XCTAssertTrue(agent.isRunning)
+    XCTAssertEqual(agent.status, "Observer: paused for your break")
+    XCTAssertNil(agent.tick())
+    // The break ends: the mirror resumes the observer and checks work again.
+    relaunched.apply(snapshot(.active))
+    await check()
+    XCTAssertEqual(screen.captures, 1, "resume() worked after the break")
+  }
+
+  // MARK: A new session after an ended one starts a fresh timeline (review 10)
+
+  func testANewSessionAfterAnEndedOneHasAFreshStartAndAFreshTimeline() async throws {
+    try turnOn()
+    let store = makeStore()
+    try store.addTask(title: "Write report", day: "2026-10-05", startAt: at("09:00:00Z"), endAt: at("10:00:00Z"))
+    let planner = makePlanner(store: store)
+    mirror.setObserver(agent)
+    planner.refresh()
+    await agent.startTask?.value
+    await check()
+    XCTAssertEqual(timeline.sessionStartedAt, at("09:30:00Z"))
+    XCTAssertFalse(timeline.observations.isEmpty)
+
+    clock.set("2026-10-05T10:00:01Z")
+    mirror.handleDeadline()
+    XCTAssertEqual(mirror.snapshot.phase, .ended)
+    clock.set("2026-10-05T10:10:00Z")
+    try store.addTask(title: "Second round", day: "2026-10-05", startAt: at("10:10:00Z"), endAt: at("11:00:00Z"))
+    planner.refresh()
+    await agent.startTask?.value
+    XCTAssertEqual(timeline.sessionStartedAt, at("10:10:00Z"), "a fresh session start")
+    XCTAssertTrue(timeline.observations.isEmpty, "a fresh timeline")
+    XCTAssertTrue(timeline.entries.isEmpty)
+  }
+
+  // MARK: A long error is a notice, not a tag (review 23)
+
+  func testALongObserverErrorIsNotShownInsideTheTag() async throws {
+    try turnOn()
+    localProblem = .modelMissing("a-very-long-model-name:70b-instruct-q4_K_M")
+    await startSession()
+    let error = try XCTUnwrap(agent.lastError)
+    XCTAssertGreaterThan(error.count, 50)
+    XCTAssertTrue(agent.status.contains(error), "the status line carries the whole sentence")
+    let tag = FlowView.observerTagText(status: agent.status, lastError: agent.lastError)
+    XCTAssertEqual(tag, "Observer: needs attention", "the tag stays short; the sentence is in the notice under the header")
+    // Short statuses stay as they are.
+    XCTAssertEqual(FlowView.observerTagText(status: "Observer: off", lastError: nil), "Observer: off")
+    XCTAssertEqual(FlowView.observerTagText(status: "Last check 10:42 · on plan", lastError: nil), "Last check 10:42 · on plan")
+    XCTAssertEqual(
+      FlowView.observerTagText(status: "Observer stopped after 3 failed checks", lastError: "The model did not answer in time."),
+      "Observer stopped after 3 failed checks")
   }
 }

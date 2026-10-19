@@ -46,6 +46,23 @@ final class FlowPlanner: ObservableObject {
   /// cardID → label (the model's, the person's), mirrored from the store once a second (F5).
   @Published private(set) var cardLabels: [String: TBDFlowCardLabel] = [:]
 
+  /// The sentence for the Today page when the Flow list file could not be read at start (review 19): a copy was kept and
+  /// the list starts empty, or the file could not even be moved aside and nothing is saved over it. nil = nothing to say.
+  var storeNotice: String? { Self.storeNotice(for: store) }
+
+  static func storeNotice(for store: TBDFlowStore) -> String? {
+    if let backup = store.corruptBackupURL {
+      return String(
+        localized: "TBD could not read your Flow list. It kept a copy at \(backup.lastPathComponent). Your list starts empty.")
+    }
+    if store.isLockedByUnreadableFile {
+      return String(
+        localized:
+          "TBD could not read your Flow list and could not move the file aside. It will not save over it, so changes are not saved until you move the file.")
+    }
+    return nil
+  }
+
   /// Where the list comes from (F4): Task Board when licensed, connected and granted, else this Mac.
   let taskBoard: FlowTaskBoardSource
 
@@ -89,10 +106,14 @@ final class FlowPlanner: ObservableObject {
     mirror.onGoalsCompleted = { [weak self] goals in
       for goal in goals { self?.detectedCompletion(taskID: goal.id) }
     }
-    // Only tasks that were really checked off get the "Checked off" toast; a Task Board task gets "Looks done" instead.
+    // Only tasks that were really checked off get the "Checked off" toast; a Task Board task gets "Looks done" instead,
+    // and a task the person reopened in this session is not touched (the person wins).
     mirror.goalsToAnnounce = { [weak self] goals in
       guard let self else { return goals }
-      return goals.filter { goal in self.tasks.first(where: { $0.id == goal.id })?.source != .taskBoard }
+      return goals.filter { goal in
+        guard let task = self.tasks.first(where: { $0.id == goal.id }) else { return true }
+        return task.source != .taskBoard && !self.reopenedByPersonThisSession(task)
+      }
     }
     tick()
     timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -140,9 +161,13 @@ final class FlowPlanner: ObservableObject {
 
   private func showFinished(_ finished: TBDFlowFocus) {
     guard settings.overlay else { return }
-    mirror.toast(
-      finished.mode == .focus
-        ? String(localized: "Focus done. Take a short break?") : String(localized: "Break's over."))
+    if finished.mode == .break {
+      // A session on a break says "Break's over. Back to it!" itself when the timer ends: one toast, not two.
+      guard mirror.snapshot.phase != .onBreak else { return }
+      mirror.toast(String(localized: "Break's over."))
+    } else {
+      mirror.toast(String(localized: "Focus done. Take a short break?"))
+    }
   }
 
   /// v1: among the pending reminders the one shown least recently, if it is due again, becomes a toast (and a sound).
@@ -166,7 +191,12 @@ final class FlowPlanner: ObservableObject {
       return
     }
     let current = now()
-    let previousStart = ownedSession ? mirror.snapshot.sessionStartedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) } : nil
+    // A session that ended by itself is over: a plan that appears now is a NEW session (fresh start, fresh timeline).
+    let previousSessionOver = mirror.snapshot.phase == .ended
+    // A session the mirror restored after a relaunch (live or on a break) is adopted, not restarted.
+    let restoredLive = !ownedSession && (mirror.snapshot.phase == .active || mirror.snapshot.phase == .onBreak)
+    let keepsStart = (ownedSession && !previousSessionOver) || restoredLive
+    let previousStart = keepsStart ? mirror.snapshot.sessionStartedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) } : nil
     guard
       let plan = TBDFlowSession.plan(
         tasks: tasks, focus: focus, now: current, calendar: calendar, previousStartsAt: previousStart)
@@ -174,6 +204,7 @@ final class FlowPlanner: ObservableObject {
       endOwnedSession()
       return
     }
+    if previousSessionOver { ownedSession = false }
     var snapshot = FlowNativeSnapshot()
     snapshot.phase = .active
     snapshot.alertStyle = FlowAgentSettings.savedAlertStyle(defaults)
@@ -181,7 +212,7 @@ final class FlowPlanner: ObservableObject {
     snapshot.sessionEndsAt = Int(plan.endsAt.timeIntervalSince1970)
     snapshot.goals = plan.goals
     if !ownedSession {
-      mirror.apply(snapshot)
+      if !restoredLive { mirror.apply(snapshot) }
       ownedSession = true
     }
     if let until = plan.onBreakUntil {
@@ -208,6 +239,8 @@ final class FlowPlanner: ObservableObject {
   func detectedCompletion(taskID: String) {
     guard let task = tasks.first(where: { $0.id == taskID }), task.status != .done, task.status != .cancelled else { return }
     guard task.source == .taskBoard else {
+      // The person wins: a task they reopened in this session is not closed again by the observer.
+      guard !reopenedByPersonThisSession(task) else { return }
       run { try store.setStatus(id: taskID, .done) }
       return
     }
@@ -216,6 +249,13 @@ final class FlowPlanner: ObservableObject {
     if isNew, settings.overlay, FlowAgentSettings.savedAlertStyle(defaults) != .quiet {
       mirror.toast(String(localized: "Looks done: \(task.title). Mark it done on Task Board when you are ready."))
     }
+  }
+
+  /// The person moved this task from done back to open after the session began.
+  private func reopenedByPersonThisSession(_ task: TBDFlowTask) -> Bool {
+    guard let reopened = task.reopenedAt else { return false }
+    guard let started = mirror.snapshot.sessionStartedAt else { return true }
+    return reopened >= Date(timeIntervalSince1970: TimeInterval(started))
   }
 
   // MARK: - Page actions
@@ -250,7 +290,9 @@ final class FlowPlanner: ObservableObject {
   /// as the Flow page (`FlowDayModel.snapshot`).
   func minutesOnPlan(for task: TBDFlowTask) -> Int {
     let plan = planTasks(forDay: task.day)
-    let snapshot = FlowDayModel.snapshot(cards: timelineEvidence(), tasks: plan, labels: store.cardLabels, now: now())
+    let cards = timelineEvidence()
+    let snapshot = FlowDayModel.snapshot(
+      cards: cards, tasks: plan, labels: store.cardLabels, now: now(), day: companionDayRange(forDay: task.day))
     return Int((snapshot.minutesPerTask[task.id] ?? 0).rounded())
   }
 
@@ -263,7 +305,15 @@ final class FlowPlanner: ObservableObject {
     if case .waiting = taskBoardRows[task.id] { return }
     let id = task.id
     taskBoardRows[id] = .working
-    let result = TBDFlowTaskBoardResult.text(minutesOnPlan: minutesOnPlan(for: task))
+    // The text is frozen at the first tap and saved on the task: a retry (lost reply, owner approval, restart) sends the
+    // same words, so the idempotent call never changes meaning.
+    let result: String
+    if let frozen = store.task(id: id)?.taskBoardResult ?? task.taskBoardResult {
+      result = frozen
+    } else {
+      result = TBDFlowTaskBoardResult.text(minutesOnPlan: minutesOnPlan(for: task))
+      _ = try? store.updateTask(id: id) { $0.taskBoardResult = result }
+    }
     do {
       _ = try await taskBoard.complete(issue: issue, result: result) { [weak self] message in
         self?.taskBoardRows[id] = .waiting(message)
@@ -379,16 +429,44 @@ final class FlowPlanner: ObservableObject {
       .sorted { ($0.startAt ?? .distantPast) < ($1.startAt ?? .distantPast) }
   }
 
-  /// Companion's timeline cards of today's Companion day, as the matcher reads them (stable id = the record id).
+  /// The Companion day (4 AM to 4 AM) of the planner's now, as `yyyy-MM-dd`. Cards and the plan they are compared with
+  /// use this day, so a night owl's cards after midnight still belong to the evening's plan.
+  var companionDayKey: String { FlowCardLabeller.companionDay(now(), calendar: calendar) }
+
+  /// The start and end of the Companion day of the planner's now (4 AM to 4 AM).
+  var companionDayRange: (start: Date, end: Date) {
+    let info = now().getDayInfoFor4AMBoundary(calendar: calendar)
+    return (info.startOfDay, info.endOfDay)
+  }
+
+  /// The Companion day (4 AM to 4 AM) named by `day` (`yyyy-MM-dd`); today's range when the text cannot be read.
+  func companionDayRange(forDay day: String) -> (start: Date, end: Date) {
+    guard let parts = TBDFlowDay.components(day) else { return companionDayRange }
+    var components = DateComponents()
+    components.year = parts.year
+    components.month = parts.month
+    components.day = parts.day
+    components.hour = 12
+    guard let noon = calendar.date(from: components) else { return companionDayRange }
+    let info = noon.getDayInfoFor4AMBoundary(calendar: calendar)
+    return (info.startOfDay, info.endOfDay)
+  }
+
+  /// Companion's timeline cards of today's Companion day, as the matcher reads them (stable id = the record id). A label
+  /// whose card was rebuilt with a new id moves to the new card first.
   func timelineEvidence() -> [TBDFlowCardEvidence] {
-    let day = FlowCardLabeller.companionDay(now(), calendar: calendar)
-    return cardsForDay(day).compactMap { FlowCardLabeller.evidence(for: $0, calendar: calendar) }
+    let cards = cardsForDay(companionDayKey).compactMap { FlowCardLabeller.evidence(for: $0, calendar: calendar) }
+    if let moved = try? store.reattachCardLabels(to: cards), moved > 0 { load() }
+    return cards
   }
 
   /// The person says what a card was. Stored with `by: .person` (it wins over the model and the rules). `note` goes to the
   /// observer as a queued line ("The person says 9:35 AM – 10:00 AM was off plan."); nil sends nothing.
-  func correctCard(_ cardID: String, label: TBDFlowLabel, taskID: String?, note: String?) {
-    let stored = run { _ = try store.setCardLabel(cardID: cardID, label: label, taskID: taskID, by: .person, at: now()) }
+  func correctCard(_ cardID: String, label: TBDFlowLabel, taskID: String?, note: String?, cardStart: Date? = nil, cardEnd: Date? = nil) {
+    let stored = run {
+      _ = try store.setCardLabel(
+        cardID: cardID, label: label, taskID: taskID, by: .person, at: now(), cardStart: cardStart, cardEnd: cardEnd)
+    }
     if stored, let note { mirror.observer.noteUserEvent(note, markRefocused: false) }
   }
 

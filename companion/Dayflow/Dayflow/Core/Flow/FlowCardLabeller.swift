@@ -8,8 +8,10 @@
 //  `by: .model`; the store keeps a person's correction on top. Cards without a model label still get the rule label at
 //  read time (`TBDFlowMatcher`).
 //
-//  It needs no screen: it reads card text only. It runs when the observer's route is local, or cloud with the person's
-//  consent (`TBDFlowObserverSetup.resolve()`), and does not need the "watch my screen" switch.
+//  It reads card text only (titles, summaries, apps, times) and the titles of today's tasks. A local route runs as
+//  before and does not need the "watch my screen" switch. A cloud route runs ONLY while the switch is on AND the person
+//  chose the cloud model (`TBDFlowObserverSetup.resolve()` checks the choice, `leavesThisMac` marks the route): with the
+//  switch off, nothing leaves this Mac. A card outside the plan is never sent and never gets a label.
 //
 
 import Foundation
@@ -95,22 +97,30 @@ final class FlowCardLabeller: ObservableObject {
       lastRunSummary = error.localizedDescription
       return 0
     }
+    // Cloud: the switch must be on as well. Card and task titles go to the provider, so no switch, no call.
+    if setup.leavesThisMac, !setup.watching {
+      lastRunSummary = "The cloud model gets nothing while \"Watch my screen for focus\" is off."
+      return 0
+    }
     let current = now()
     let day = Self.companionDay(current, calendar: calendar)
-    let tasks = store.state.tasks.filter { $0.day == TBDFlowDay.string(from: current, calendar: calendar) && $0.status != .cancelled }
+    let tasks = store.state.tasks.filter { $0.day == day && $0.status != .cancelled }
     let plan = tasks.filter { !TBDFlowSession.isBreak($0) }
     guard !plan.isEmpty else {
       lastRunSummary = "No plan for today."
       return 0
     }
+    let cards = cardsForDay(day).compactMap { Self.evidence(for: $0, calendar: calendar) }
+    // A card Companion rebuilt keeps its label before anything is asked again.
+    _ = try? store.reattachCardLabels(to: cards)
     let labels = store.cardLabels
-    let pending =
-      cardsForDay(day).compactMap { Self.evidence(for: $0, calendar: calendar) }
-      .filter { card in
-        card.end.addingTimeInterval(Self.settleSeconds) <= current
-          && (labels[card.id].map { $0.by == .rule } ?? true)
-          && attempts[card.id, default: 0] < Self.maxAttemptsPerCard
-      }
+    let pending = cards.filter { card in
+      card.end.addingTimeInterval(Self.settleSeconds) <= current
+        && (labels[card.id].map { $0.by == .rule } ?? true)
+        && attempts[card.id, default: 0] < Self.maxAttemptsPerCard
+        // Outside the plan (before the first task or after the last): not sent, no label.
+        && TBDFlowMatcher.propose(card: card, tasks: tasks) != nil
+    }
     var stored = 0
     var calls = 0
     var failures = 0
@@ -125,7 +135,10 @@ final class FlowCardLabeller: ObservableObject {
         failures = 0
         guard let answer = Self.parse(reply, plan: plan) else { continue }
         // The store keeps a person's label on top (it returns false then).
-        if (try? store.setCardLabel(cardID: card.id, label: answer.label, taskID: answer.taskID, by: .model, at: now())) == true {
+        if (try? store.setCardLabel(
+          cardID: card.id, label: answer.label, taskID: answer.taskID, by: .model, at: now(), cardStart: card.start,
+          cardEnd: card.end)) == true
+        {
           stored += 1
         }
       } catch {
@@ -138,10 +151,10 @@ final class FlowCardLabeller: ObservableObject {
 
   // MARK: - Cards
 
-  /// The Companion day (a day runs from 4 AM to 4 AM) that `date` falls in, as `yyyy-MM-dd`.
+  /// The Companion day (a day runs from 4 AM to 4 AM) that `date` falls in, as `yyyy-MM-dd`. Companion's own rule
+  /// (`Date.getDayInfoFor4AMBoundary`), so Flow and the timeline pick the same cards.
   static func companionDay(_ date: Date, calendar: Calendar) -> String {
-    let shifted = calendar.date(byAdding: .hour, value: -4, to: date) ?? date
-    return TBDFlowDay.string(from: shifted, calendar: calendar)
+    date.getDayInfoFor4AMBoundary(calendar: calendar).dayString
   }
 
   /// A card as the matcher reads it. The stable id is the database record id (`TimelineCard.id` is a random UUID per

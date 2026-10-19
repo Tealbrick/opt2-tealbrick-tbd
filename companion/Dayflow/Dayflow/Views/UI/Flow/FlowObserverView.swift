@@ -355,7 +355,7 @@ struct FlowObserverView: View {
       card {
         Text("Today").font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted)
         Text(observer.counters.summary).font(TBDTokens.Typography.body).foregroundStyle(TBDColor.inkSoft)
-        Text("Screen text and screenshots are not stored. Only the verdicts are kept for today.")
+        Text("Screen text and screenshots are not stored. TBD keeps today's short check notes on this Mac.")
           .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
       }
     }

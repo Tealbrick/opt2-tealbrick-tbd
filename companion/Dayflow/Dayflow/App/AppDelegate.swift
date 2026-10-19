@@ -215,6 +215,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    // Flow: stop the observer so no screenshot folder is left in the temp folder.
+    if !TBDOnboardingController.isTestHost { FlowDistractionAgent.shared.stop() }
     TBDChatRuntime.shared.stop()
     TBDListeningRuntime.shared.terminate()
     recorder?.finishForTermination()

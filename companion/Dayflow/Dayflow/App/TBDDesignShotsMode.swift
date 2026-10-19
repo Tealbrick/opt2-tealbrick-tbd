@@ -99,12 +99,22 @@
       TBDFonts.register()
       NSApplication.shared.setActivationPolicy(.prohibited)
       let seeded = DemoSeed.seed()
-      let flow = FlowShotsSeed.planner()
-      let flowBoard = FlowShotsSeed.taskBoardPlanner()
-      let flowDay = FlowShotsSeed.planVsActualPlanner()
+      // Flow: a sandbox in the temp folder holds every store, suite and source of the Flow shots.
+      let sandbox = FlowShotsSandbox()
+      defer { sandbox.cleanUp() }
+      let flow = FlowShotsSeed.planner(sandbox)
+      let flowBoard = FlowShotsSeed.taskBoardPlanner(sandbox)
+      let flowDay = FlowShotsSeed.planVsActualPlanner(sandbox)
       let flowDayModel = FlowDayModel(planner: flowDay, modelSource: { "by TBD (model on this Mac)" })
-      let observerShots = FlowShotsSeed.observerScreens()
+      let observerShots = FlowShotsSeed.observerScreens(sandbox)
       defer { observerShots.cleanUp() }
+      // The tabs that are not the Observer tab get an observer on the sandbox too (never the shared one).
+      let quiet = observerShots.screens[0]
+      guard sandbox.isContained() else {
+        throw NSError(
+          domain: "TBDDesignShots", code: 2,
+          userInfo: [NSLocalizedDescriptionKey: "the Flow shots would leave the temp folder (\(sandbox.root.path))"])
+      }
       // Creates the Listening context on the demo root (no start: no capture, hotkeys, downloads), so Settings → Listen
       // pages render their real content.
       _ = TBDListeningRuntime.shared.previewSettings(section: "capture")
@@ -144,12 +154,12 @@
         // Flow (F2): the local Today page on a seeded store, the observer placeholder and the nudge preview.
         for (tab, name) in [(FlowTab.today, "today"), (.nudge, "nudge")] {
           try render(
-            FlowView(planner: flow, tab: tab, showsTasklistImport: true).background(TBDColor.tile), size: main, dark: dark,
+            FlowView(planner: flow, tab: tab, showsTasklistImport: true, observer: quiet.agent, observerModel: quiet.model).background(TBDColor.tile), size: main, dark: dark,
             name: "flow-\(name)-\(theme)")
         }
         // Flow (F4): Today with Task Board as the source ("Looks done" row, source labels), and the Add from Task Board sheet.
         try render(
-          FlowView(planner: flowBoard, tab: .today, showsTasklistImport: false).background(TBDColor.tile), size: main, dark: dark,
+          FlowView(planner: flowBoard, tab: .today, showsTasklistImport: false, observer: quiet.agent, observerModel: quiet.model).background(TBDColor.tile), size: main, dark: dark,
           name: "flow-today-taskboard-\(theme)")
         try render(
           FlowTaskBoardSheet(
@@ -160,10 +170,14 @@
         // Flow (F5): Today with the strip, the minutes on each row and the Off plan card; and the Plan vs actual tab (cards,
         // labels, where each label came from). The "This was…" menus are system menus: they are covered by unit tests.
         try render(
-          FlowView(planner: flowDay, tab: .today, showsTasklistImport: false, dayModel: flowDayModel).background(TBDColor.tile),
+          FlowView(
+            planner: flowDay, tab: .today, showsTasklistImport: false, observer: quiet.agent, observerModel: quiet.model,
+            dayModel: flowDayModel).background(TBDColor.tile),
           size: main, dark: dark, name: "flow-today-planvsactual-\(theme)")
         try render(
-          FlowView(planner: flowDay, tab: .planVsActual, showsTasklistImport: false, dayModel: flowDayModel).background(TBDColor.tile),
+          FlowView(
+            planner: flowDay, tab: .planVsActual, showsTasklistImport: false, observer: quiet.agent, observerModel: quiet.model,
+            dayModel: flowDayModel).background(TBDColor.tile),
           size: CGSize(width: 1280, height: 900), dark: dark, name: "flow-plan-vs-actual-\(theme)")
         // The Observer tab (F3): text on this Mac (the mockup), a local vision model that is not downloaded yet, a cloud model.
         for screen in observerShots.screens {
@@ -249,12 +263,93 @@
     }
   }
 
+  // MARK: - Flow shots sandbox
+
+  /// Everything the Flow shots touch lives here: a unique folder in the system temp folder (never the app-support folder,
+  /// never the real Flow list), its own UserDefaults suite, an isolated session mirror and timeline, and Task Board sources
+  /// that are seeded and frozen (they never ask the helper). `FlowShotsSandboxTests` proves the paths stay under the temp
+  /// folder. `cleanUp()` removes what the sandbox made.
+  @MainActor
+  final class FlowShotsSandbox {
+    let root: URL
+    let defaults: UserDefaults
+    private let suiteName: String
+    private(set) var handedOutURLs: [URL] = []
+
+    init(temporary: URL = FileManager.default.temporaryDirectory) {
+      root = temporary.appendingPathComponent("tbd-flow-shots-\(UUID().uuidString)", isDirectory: true)
+      try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+      suiteName = "tbd.design-shots.flow.\(UUID().uuidString)"
+      defaults = UserDefaults(suiteName: suiteName) ?? UserDefaults()
+    }
+
+    /// `<root>/<name>/flow.json` for one planner.
+    func storeURL(_ name: String) -> URL {
+      let url = root.appendingPathComponent(name, isDirectory: true).appendingPathComponent("flow.json")
+      handedOutURLs.append(url)
+      return url
+    }
+
+    /// A Task Board source that shows `mode` and `issues` and never asks the helper.
+    func taskBoard(mode: TBDFlowSourceMode, issues: [TBDFlowTaskBoardIssue] = []) -> FlowTaskBoardSource {
+      let source = FlowTaskBoardSource()
+      source.seed(mode: mode, issues: issues)
+      return source
+    }
+
+    func settings() -> FlowAgentSettings { FlowAgentSettings(defaults: defaults) }
+
+    func timeline() -> FlowSessionTimeline {
+      let url = root.appendingPathComponent("flow-session-timeline.json")
+      handedOutURLs.append(url)
+      return FlowSessionTimeline(fileURL: url)
+    }
+
+    /// A mirror with its own defaults, settings and timeline, and no observer.
+    func mirror(now: @escaping () -> Date = { Date() }) -> FlowSessionMirror {
+      FlowSessionMirror(defaults: defaults, settings: settings(), timeline: timeline(), observer: FlowNoObserver(), now: now)
+    }
+
+    /// A planner that touches nothing outside the sandbox: its own store, mirror, defaults, Task Board source and cards.
+    func planner(
+      store: TBDFlowStore, now: @escaping () -> Date, taskBoard: FlowTaskBoardSource, cards: [TimelineCard] = []
+    ) -> FlowPlanner {
+      FlowPlanner(
+        store: store, mirror: mirror(now: now), defaults: defaults, now: now, playSound: {}, taskBoard: taskBoard,
+        cardsForDay: { _ in cards })
+    }
+
+    /// Every URL the sandbox handed out is inside `root`, and `root` is inside the system temp folder and not inside the
+    /// app-support folder. The shots check this before they run.
+    func isContained(temporary: URL = FileManager.default.temporaryDirectory) -> Bool {
+      Self.contains(
+        root: root, urls: handedOutURLs, temporary: temporary,
+        support: TBDIdentity.applicationSupport().deletingLastPathComponent())
+    }
+
+    /// The containment rule on plain paths (the test drives it with made-up folders).
+    nonisolated static func contains(root: URL, urls: [URL], temporary: URL, support: URL) -> Bool {
+      let temp = temporary.standardizedFileURL.path
+      let supportPath = support.standardizedFileURL.path
+      let rootPath = root.standardizedFileURL.path
+      guard rootPath.hasPrefix(temp + "/"), !rootPath.hasPrefix(supportPath + "/"), !temp.hasPrefix(supportPath + "/"), temp != supportPath
+      else { return false }
+      return urls.allSatisfy { $0.standardizedFileURL.path.hasPrefix(rootPath + "/") }
+    }
+
+    func cleanUp() {
+      defaults.removePersistentDomain(forName: suiteName)
+      guard root.lastPathComponent.hasPrefix("tbd-flow-shots-") else { return }
+      try? FileManager.default.removeItem(at: root)  // the sandbox's own folder
+    }
+  }
+
   // MARK: - Flow demo data
 
   /// A planner on a seeded store inside the shots root (deleted at the end): four tasks like the approved mockup, one
   /// done, one "Now" with a running focus timer. The clock stands still at 10:18, so the page is the same on every run.
   @MainActor
-  private enum FlowShotsSeed {
+  enum FlowShotsSeed {
     struct ObserverScreen {
       let suffix: String
       let agent: FlowDistractionAgent
@@ -269,7 +364,7 @@
       func cleanUp() { suiteNames.forEach { UserDefaults.standard.removePersistentDomain(forName: $0) } }
     }
 
-    static func observerScreens() -> ObserverScreens {
+    static func observerScreens(_ sandbox: FlowShotsSandbox) -> ObserverScreens {
       var suites: [String] = []
       func screen(_ suffix: String, _ prepare: (TBDFlowObserverSetup, TBDModelRegistry) throws -> Void) -> ObserverScreen {
         let name = "tbd.design-shots.flow-observer.\(UUID().uuidString)"
@@ -279,7 +374,9 @@
         let setup = TBDFlowObserverSetup(registry: registry, defaults: defaults)
         do { try prepare(setup, registry) } catch { print("tbd design shots: observer seed failed: \(error)") }
         setup.watching = true
-        let agent = FlowDistractionAgent(setup: setup, defaults: defaults, schedulesTimer: false)
+        let agent = FlowDistractionAgent(
+          setup: setup, source: FlowShotsNoScreen(), settings: sandbox.settings(), timeline: sandbox.timeline(),
+          mirror: sandbox.mirror(), defaults: defaults, schedulesTimer: false, tempRoot: sandbox.root)
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let at1042 = calendar.date(bySettingHour: 10, minute: 42, second: 0, of: today) ?? today
@@ -308,14 +405,14 @@
 
     /// F4: today's plan with Task Board as the source (mockup "today-taskboard"). A seeded source: no helper call, no
     /// entitlement read, no Keychain.
-    static func taskBoardPlanner() -> FlowPlanner {
+    static func taskBoardPlanner(_ sandbox: FlowShotsSandbox) -> FlowPlanner {
       let calendar = Calendar.current
       let base = calendar.startOfDay(for: Date())
       func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
         calendar.date(bySettingHour: hour, minute: minute, second: second, of: base) ?? base
       }
       let clock = Clock(at(10, 12))
-      let url = TBDIdentity.applicationSupport("FlowShotsTaskBoard").appendingPathComponent("flow.json")
+      let url = sandbox.storeURL("FlowShotsTaskBoard")
       let store = TBDFlowStore(url: url, clock: { clock.date })
       let day = TBDFlowDay.string(from: base, calendar: calendar)
       do {
@@ -336,8 +433,7 @@
         print("tbd design shots: flow task board seed failed: \(error)")
       }
       clock.date = at(10, 18, 18)
-      let source = FlowTaskBoardSource()
-      source.seed(
+      let source = sandbox.taskBoard(
         mode: .taskBoard,
         issues: [
           TBDFlowTaskBoardIssue(id: "iss_flow", title: "Flow mockups for Martin", project: "TBD", status: .inProgress, priority: "high", ready: false),
@@ -345,7 +441,7 @@
           TBDFlowTaskBoardIssue(id: "iss_q4", title: "Draft the Q4 pricing page", project: "Website", status: .todo, priority: "medium", ready: true),
           TBDFlowTaskBoardIssue(id: "iss_penpot", title: "Answer the Penpot licence question", project: "Ops", status: .todo, priority: "low", ready: true),
         ])
-      let planner = FlowPlanner(store: store, now: { clock.date }, taskBoard: source, cardsForDay: { _ in [] })
+      let planner = sandbox.planner(store: store, now: { clock.date }, taskBoard: source)
       planner.load()
       return planner
     }
@@ -353,14 +449,14 @@
     /// F5: Task Board plan with Companion's cards of the morning (mockups "today-taskboard" and "plan-vs-actual"): model, rule
     /// and person labels, an idle break, and a few finished timeboxes. A seeded source and seeded cards: no helper call, no
     /// database, no Keychain, no model call. The clock stands at 11:50.
-    static func planVsActualPlanner() -> FlowPlanner {
+    static func planVsActualPlanner(_ sandbox: FlowShotsSandbox) -> FlowPlanner {
       let calendar = Calendar.current
       let base = calendar.startOfDay(for: Date())
       func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
         calendar.date(bySettingHour: hour, minute: minute, second: second, of: base) ?? base
       }
       let clock = Clock(at(11, 12))
-      let url = TBDIdentity.applicationSupport("FlowShotsPlanVsActual").appendingPathComponent("flow.json")
+      let url = sandbox.storeURL("FlowShotsPlanVsActual")
       let store = TBDFlowStore(url: url, clock: { clock.date })
       let day = TBDFlowDay.string(from: base, calendar: calendar)
       do {
@@ -398,21 +494,20 @@
         card(105, "11:00 AM", "11:30 AM", "News and social", apps: "Safari"),
         card(106, "11:30 AM", "11:41 AM", "Reply to Eyal about the design review", apps: "Mail"),
       ]
-      let source = FlowTaskBoardSource()
-      source.seed(mode: .taskBoard, issues: [])
-      let planner = FlowPlanner(store: store, now: { clock.date }, taskBoard: source, cardsForDay: { _ in cards })
+      let source = sandbox.taskBoard(mode: .taskBoard)
+      let planner = sandbox.planner(store: store, now: { clock.date }, taskBoard: source, cards: cards)
       planner.load()
       return planner
     }
 
-    static func planner() -> FlowPlanner {
+    static func planner(_ sandbox: FlowShotsSandbox) -> FlowPlanner {
       let calendar = Calendar.current
       let base = calendar.startOfDay(for: Date())
       func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
         calendar.date(bySettingHour: hour, minute: minute, second: second, of: base) ?? base
       }
       let clock = Clock(at(10, 12))
-      let url = TBDIdentity.applicationSupport("FlowShots").appendingPathComponent("flow.json")
+      let url = sandbox.storeURL("FlowShots")
       let store = TBDFlowStore(url: url, clock: { clock.date })
       let day = TBDFlowDay.string(from: base, calendar: calendar)
       do {
@@ -426,10 +521,19 @@
         print("tbd design shots: flow seed failed: \(error)")
       }
       clock.date = at(10, 18, 18)  // 18:42 left of the 25 minutes
-      let planner = FlowPlanner(store: store, now: { clock.date })
+      let planner = sandbox.planner(
+        store: store, now: { clock.date }, taskBoard: sandbox.taskBoard(mode: .local(.notLicensed)))
       planner.load()
       return planner
     }
+  }
+
+  /// The screen source of the Flow shots: it never captures (the observer is never started in the shots).
+  struct FlowShotsNoScreen: FlowScreenSource {
+    private struct NoScreen: Error {}
+    func captureImage(height: Int) async throws -> CGImage { throw NoScreen() }
+    func recognizeText(in image: CGImage) -> String { "" }
+    func writeJPEG(_ image: CGImage, to url: URL, quality: Double) throws { throw NoScreen() }
   }
 
   // MARK: - Demo data

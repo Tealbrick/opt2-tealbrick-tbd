@@ -99,7 +99,23 @@ struct FlowView: View {
     return observer.lastError != nil ? .needsYou : .idle
   }
 
+  /// The words in the observer tag. A long error sentence is not a tag: the tag says "needs attention" and the sentence
+  /// shows in a notice under the header.
+  static func observerTagText(status: String, lastError: String?) -> String {
+    guard let lastError, !lastError.isEmpty, status.contains(lastError) else { return status }
+    return "Observer: needs attention"
+  }
+
   private var header: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s3) {
+      headerRow
+      if let error = observer.lastError, !error.isEmpty {
+        TBDNotice(error, tone: .needsYou)
+      }
+    }
+  }
+
+  private var headerRow: some View {
     HStack(alignment: .firstTextBaseline, spacing: TBDKit.s4) {
       VStack(alignment: .leading, spacing: TBDKit.s1) {
         Text("Flow").font(TBDTokens.Typography.display).tracking(TBDTokens.Typography.displayTracking)
@@ -113,7 +129,7 @@ struct FlowView: View {
         } else {
           TBDTag("Only on this Mac", status: .idle)
         }
-        TBDTag(observer.status, status: observerTagStatus)
+        TBDTag(Self.observerTagText(status: observer.status, lastError: observer.lastError), status: observerTagStatus)
       }
     }
   }

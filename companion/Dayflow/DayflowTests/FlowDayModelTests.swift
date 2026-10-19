@@ -380,4 +380,72 @@ final class FlowDayModelTests: FlowTestCase {
     XCTAssertEqual(d.model.tasks.count, 3)
     XCTAssertEqual(try dayCard(d.model, "4").label?.label, .onPlan)
   }
+
+  // MARK: Minutes follow the strip (review 21)
+
+  func testAStraddlingCardCountsOnlyTheMinutesInsideThePlanWindow() throws {
+    // The plan window is 08:00 to 11:30. This card runs 07:30 to 08:30: 30 minutes are inside.
+    let d = try makeDay(cards: [card(1, "7:30 AM", "8:30 AM", "Quarterly report draft", apps: "Pages")])
+    XCTAssertEqual(d.model.snapshot.totals.onPlanMinutes, 30)
+    XCTAssertEqual(d.model.snapshot.minutesPerTask[d.report.id], 30)
+    XCTAssertEqual(d.model.snapshot.totals.outsideMinutes, 0)
+  }
+
+  func testOverlappingCardsCountTheirMinutesOnce() throws {
+    let d = try makeDay(cards: [
+      card(1, "8:00 AM", "8:45 AM", "Quarterly report draft", apps: "Pages"),
+      card(2, "8:30 AM", "9:00 AM", "Quarterly report outline", apps: "Pages"),
+    ])
+    XCTAssertEqual(d.model.snapshot.totals.onPlanMinutes, 60, "15 minutes lie in both cards and count once")
+    // The strip agrees with the totals.
+    let counted = d.model.snapshot.segments.filter { $0.kind != .notTracked }.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) / 60 }
+    let t = d.model.snapshot.totals
+    XCTAssertEqual(counted, t.onPlanMinutes + t.offPlanMinutes + t.restMinutes, accuracy: 0.001)
+  }
+
+  func testCardsAreCutToTheDayOfTheTasks() {
+    let start = at("08:00:00Z"), end = at("11:30:00Z")
+    let evidence = TBDFlowCardEvidence(id: "1", start: at("07:00:00Z"), end: at("09:00:00Z"), title: "Write report")
+    let task = TBDFlowTask(id: "t", title: "Write report", day: day, startAt: start, endAt: end, createdAt: start)
+    // The day starts at 08:30: only 30 of the card's 120 minutes belong to it.
+    let snap = FlowDayModel.snapshot(
+      cards: [evidence], tasks: [task], labels: [:], now: at("12:00:00Z"), day: (at("08:30:00Z"), at("20:00:00Z")))
+    XCTAssertEqual(snap.totals.onPlanMinutes + snap.totals.offPlanMinutes, 30)
+  }
+
+  // MARK: Companion's 4 AM day (review 22)
+
+  func testCompanionDayUsesTheFourAMBoundaryEvenOnDaylightSavingDays() {
+    var ny = Calendar(identifier: .gregorian)
+    ny.timeZone = TimeZone(identifier: "America/New_York")!
+    // 2026-03-08 04:30 EDT (clocks went forward at 02:00): already the new day.
+    XCTAssertEqual(FlowCardLabeller.companionDay(TBDFlowISO.date("2026-03-08T08:30:00Z")!, calendar: ny), "2026-03-08")
+    // 2026-03-08 03:30 EDT: still the old day.
+    XCTAssertEqual(FlowCardLabeller.companionDay(TBDFlowISO.date("2026-03-08T07:30:00Z")!, calendar: ny), "2026-03-07")
+    // 2026-11-01 03:30 EST (clocks went back at 02:00): still the old day.
+    XCTAssertEqual(FlowCardLabeller.companionDay(TBDFlowISO.date("2026-11-01T08:30:00Z")!, calendar: ny), "2026-10-31")
+    // The same answer as Companion's own helper.
+    let date = TBDFlowISO.date("2026-11-01T09:30:00Z")!
+    XCTAssertEqual(FlowCardLabeller.companionDay(date, calendar: ny), date.getDayInfoFor4AMBoundary(calendar: ny).dayString)
+  }
+
+  func testAtTwoInTheMorningTheCardsAndThePlanAreThoseOfTheEveningBefore() throws {
+    clock.set("2026-10-06T02:00:00Z")
+    var requested: [String] = []
+    let store = makeStore()
+    try store.addTask(title: "Write quarterly report", day: day, startAt: at("20:00:00Z"), endAt: TBDFlowISO.date("2026-10-06T03:00:00Z"))
+    let planner = FlowPlanner(
+      store: store, mirror: mirror, defaults: defaults, calendar: Self.utc, now: { [clock] in clock.now }, playSound: {},
+      taskBoard: FlowTaskBoardSource(client: FakeTaskBoardClient()),
+      cardsForDay: { day in
+        MainActor.assumeIsolated { requested.append(day) }
+        return []
+      })
+    planner.load()
+    let model = FlowDayModel(planner: planner, modelSource: { "x" })
+    XCTAssertEqual(planner.companionDayKey, day)
+    XCTAssertEqual(planner.todayKey, "2026-10-06", "the calendar day has already changed")
+    XCTAssertEqual(requested.last, day, "the timeline is asked for the Companion day")
+    XCTAssertEqual(model.tasks.map(\.title), ["Write quarterly report"], "the plan is the one of that Companion day")
+  }
 }
