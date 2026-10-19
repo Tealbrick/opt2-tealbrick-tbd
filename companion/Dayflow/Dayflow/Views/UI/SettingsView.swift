@@ -49,7 +49,10 @@ struct SettingsView: View {
   /// The Connectors pane's store; design shots pass a seeded one.
   private let connectorsStore: ConnectorsStore?
   private let connectorsPortal: ConnectorsPortal
-  init(initialSection: String = "account", connectors: ConnectorsStore? = nil, connectorsPortal: ConnectorsPortal = .live) {
+  /// The Access pane's store of the choices for TBD's agent on this Mac; design shots pass a seeded one.
+  private let localChoicesStore: LocalChoicesStore?
+  init(initialSection: String = "account", connectors: ConnectorsStore? = nil, connectorsPortal: ConnectorsPortal = .live, localChoices: LocalChoicesStore? = nil) {
+    self.localChoicesStore = localChoices
     self.connectorsStore = connectors
     self.connectorsPortal = connectorsPortal
     _selectedTab = State(initialValue: SettingsTab(rawValue: initialSection) ?? .account)
@@ -265,7 +268,7 @@ struct SettingsView: View {
       case .account:
         SettingsAccountSection()
       case .permissions:
-        TBDPermissionsView()
+        TBDPermissionsView(localChoices: localChoicesStore)
       case .connectors:
         SettingsConnectorsTabView(store: connectorsStore, portal: connectorsPortal)
       case .storage:

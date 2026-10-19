@@ -18,7 +18,7 @@ struct Category {
   let isIdle: Bool
 }
 
-private let dayflowDefaultsDomain = tbdAppDefaultsDomain
+private let dayflowDefaultsDomain = tbdDefaultsDomain()
 
 /// Matches CategoryPersistence.defaultCategories in the app.
 private let defaultCategories: [Category] = [

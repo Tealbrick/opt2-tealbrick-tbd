@@ -128,6 +128,9 @@ final class FlowPlanner: ObservableObject {
 
   /// One scheduler step: new reminders and a finished timer, then the published state, the reminder toast and the session.
   func tick() {
+    // The companion CLI (TBD's agent) saves plan lines to the same file. A cheap check (inode, size, time of the file) per
+    // second; the store also starts every change from what is on disk, so a tick never undoes the other writer's lines.
+    store.reloadIfChanged()
     do {
       let result = try store.tick(now: now())
       if let finished = result.finishedFocus { showFinished(finished) }

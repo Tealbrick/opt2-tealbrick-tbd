@@ -159,7 +159,7 @@ export interface DefaultAgentDeps {
    * `remember` tells the agent which standing choice decided ("always" / "never").
    * `signal` aborts when the agent process that asked is stopped or replaced: the implementation closes its card as denied.
    */
-  permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }>;
+  permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk; check?: boolean }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }>;
   /** For tests: spawn replacement. */
   spawnProcess?: typeof spawn;
 }
@@ -266,7 +266,7 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
         if (!openPermissions.delete(open) || from !== currentEpoch) return;
         send(message);
       };
-      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input, ...(m.connect ? { connect: m.connect } : {}) }, open.abort.signal)
+      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input, ...(m.connect ? { connect: m.connect } : {}), ...(m.check === true ? { check: true } : {}) }, open.abort.signal)
         .then((d) => reply({ type: "permission", reqId: m.reqId, allow: d.allow, message: d.message, ...(d.remember ? { remember: d.remember } : {}) }))
         .catch(() => reply({ type: "permission", reqId: m.reqId, allow: false }));
     } else if (m.type === "question") {

@@ -9,6 +9,7 @@
 
 import Darwin
 import Foundation
+import TBDFlowShared
 
 private struct AgentUsageRecord: Encodable {
   let schemaVersion = 1
@@ -53,8 +54,7 @@ enum AgentUsageTelemetry {
   private static var cliFinished = false
 
   private static var appSupportDirectory: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent(tbdAppDataFolder + "/Companion", isDirectory: true)
+    tbdDataDirectory().appendingPathComponent("Companion", isDirectory: true)
   }
 
   private static var queueURL: URL {
@@ -188,6 +188,8 @@ enum AgentUsageTelemetry {
   }
 
   private static func append(_ data: Data) {
+    // L70: no write under the person's real TBD data from a test or a tool run.
+    guard !TBDRealDataGuard.refuses(writingTo: queueURL) else { return }
     do {
       try FileManager.default.createDirectory(
         at: appSupportDirectory,

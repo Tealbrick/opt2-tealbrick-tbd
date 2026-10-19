@@ -83,7 +83,7 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
 
   // Native settings use the same IPC handlers and credential store as Chat.
   func accountCall(_ channel: String, args: [Any] = []) async throws -> Any {
-    let allowed: Set<String> = ["session", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
+    let allowed: Set<String> = ["session", "sessionNotice", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
       // Read-only: agent directory (TBD agent) and the verified update feed for the native updater.
       "listAgents", "checkUpdate",
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
@@ -92,6 +92,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       "flowTaskBoardList", "flowTaskBoardComplete",
       // Connectors (C11): the accounts Connect lets TBD's agent use (a read as TBD's own agent), and the person's Always/Never rules (local file).
       "connectAccounts", "connectConsentList", "connectConsentRevoke",
+      // Settings › Access (dev.17, C13 local): the person's Always/Never choices for TBD's agent's shell, file and web actions (local file).
+      "localConsentList", "localConsentRevoke",
       // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
       "restartAgent",
       // WP-HARNESS L3: the setup's 4 checks of TBD's agent with the chosen harness.
@@ -179,10 +181,10 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     }
     #if DEBUG
       if TBDIdentity.isDev {
-        // TBD Dev: TBD_CHAT_DATA and the agent workspace above are already under <dataFolder>-dev. The bundled CLIs
-        // are release builds that read the live app's data, so the dev helper gets none. The helper's file policy keeps
-        // denying the live folder.
-        env["TBD_COMPANION_CLI"] = nil
+        // TBD Dev: TBD_CHAT_DATA and the agent workspace above are already under <dataFolder>-dev. The Companion CLI follows
+        // TBD_APP_SUPPORT_DIR, which the helper passes to it from TBD_CHAT_DATA (dev.17 review S8), so TBD Dev's agent reads and
+        // writes the -dev folder and never the live one. The Listening CLI has no such switch yet, so the dev helper gets none.
+        // The helper's file policy keeps denying the live folder.
         env["TBD_LISTENING_CLI"] = nil
       }
     #endif

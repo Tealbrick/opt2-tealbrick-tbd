@@ -6,9 +6,11 @@ import { tmpdir } from "node:os";
 import { APP_DATA_FOLDER, ARCHIVED_V1_DEV_FOLDERS, ARCHIVED_V1_FOLDERS, agentFolder, appSupport, identityFolders } from "./appIdentity";
 import { saveAttachmentIn } from "./attachmentFile";
 import { app, nativeCall } from "../tbd/host";
-import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
+import { decide, realPath, sandboxSettings, writeScope, type PolicyContext } from "./filePolicy";
+import { createLocalConsentStore, decideLocalCall, type LocalConsentStore } from "./localConsent";
 import { currentControlPlane } from "./controlPlanes";
 import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
+import { createSessionKeepAlive, type SessionKeepAlive } from "./sessionKeepAlive";
 import { createEntitlements, type Entitlements } from "./entitlements";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
 import { createDefaultAgent, type AgentRoute, type DefaultAgent, type DefaultAgentDeps } from "./defaultAgent";
@@ -61,6 +63,24 @@ function personStore() {
   };
 }
 
+/**
+ * C7: while a person is signed in, one cheap read about every 30 min keeps Core's idle window sliding even when TBD's
+ * window is closed or nothing else calls Portal (sessionKeepAlive.ts). Started once with the helper; it reads only the
+ * in-memory session (never the Keychain by itself: the session is loaded once at helper start, `prepare`, by the same load the
+ * first account call does) and makes no call while signed out.
+ */
+let keepAlive: SessionKeepAlive | null = null;
+export function startSessionKeepAlive(): void {
+  keepAlive ??= createSessionKeepAlive({
+    // S6: load the stored session at helper start (same memoised load as the first account call), so the loop sees it at once.
+    prepare: async () => { getServices(); await ensurePerson(); },
+    signedIn: () => Boolean(services?.portal.session()),
+    touch: () => { if (!services) throw new Error("no session"); return services.portal.me(); },
+    log: (line) => console.error(`[helper] ${line}`),
+  });
+  keepAlive.start();
+}
+
 /** The approved connection record: ids and URLs only, no secret. */
 function connectionStore() {
   const file = () => join(dataDir(), "agent-connection.json");
@@ -106,11 +126,15 @@ export function agentFolders(): string[] {
 function saveFolders(list: string[]): void {
   writeFileSync(foldersFile(), JSON.stringify([...new Set(list)].sort(), null, 2), { mode: 0o600 });
 }
+/** The app's data folder (the parent of TBD_CHAT_DATA; the live one when the host did not say). */
+export function appDataDir(): string {
+  return process.env.TBD_CHAT_DATA ? dirname(process.env.TBD_CHAT_DATA) : join(appSupport(), APP_DATA_FOLDER);
+}
 export function policyContext(): PolicyContext {
   const home = realPath(homedir());
   // TBD's own data = the parent of TBD_CHAT_DATA (<app data>/Chat). Always denied too (C284): the archived v1 folders,
   // the other TBD v2 identity's folders (live vs TBD Dev) and the signer socket's folder.
-  const data = process.env.TBD_CHAT_DATA ? dirname(process.env.TBD_CHAT_DATA) : join(appSupport(), APP_DATA_FOLDER);
+  const data = appDataDir();
   const own = new Set([basename(data), agentFolder(basename(data))]);
   const others = [...ARCHIVED_V1_FOLDERS, ...ARCHIVED_V1_DEV_FOLDERS, ...identityFolders().filter((f) => !own.has(f))];
   return {
@@ -161,10 +185,31 @@ async function connectPermission(req: { tool: string; input: Record<string, unkn
   });
 }
 
+/**
+ * Local-action consent: the person's "Always allow" / "Never allow" choices for TBD's agent's shell commands, file writes and
+ * web requests, in the helper's state folder. Mode 0600. Not keyed by workspace: these choices are about this Mac.
+ */
+export function localConsentStore(): LocalConsentStore {
+  return createLocalConsentStore(join(dataDir(), "local-consent.json"));
+}
+
 /** One tool call: policy first, the person only when needed (SEC-04). */
-async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
+async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk; check?: boolean }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
   if (req.connect || connectOp(req.tool) !== null) return connectPermission(req, signal);
   const ctx = policyContext();
+  // Shell, file writes and edits, web: secrets deny first, then the person's Never and Always choices, then the card.
+  const local = await decideLocalCall({ tool: req.tool, input: req.input }, {
+    store: localConsentStore(),
+    policy: (tool, input) => decide(tool, input, ctx),
+    writeScope: (tool, input) => writeScope(tool, input, ctx),
+    checkOnly: req.check === true,
+    askPerson: (card, target) => askPerson({
+      id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent",
+      action: target.kind === "shell" ? "run-command" : target.kind === "write" ? "write-file" : target.kind === "plan" ? "plan-add" : "web-request", label: card.title, detail: "", local: card,
+    }, signal),
+  });
+  if (local) return local;
+  if (req.check) return { allow: true }; // a check is only for the local tools above
   const verdict = decide(req.tool, req.input, ctx);
   if (verdict.kind === "allow") return { allow: true };
   if (verdict.kind === "deny") return { allow: false, message: verdict.reason };
@@ -259,6 +304,8 @@ export function getServices(): Services {
         stateDir: join(dataDir(), stateName),
         claudeExecutable: join(resources, "claude"),
         companionCli: process.env.TBD_COMPANION_CLI,
+        // S8: the Companion server writes where THIS app (live or TBD Dev) keeps its data.
+        companionDataDir: appDataDir(),
         listeningCli: process.env.TBD_LISTENING_CLI,
         relay,
         sandbox: sandboxSettings(policyContext()),

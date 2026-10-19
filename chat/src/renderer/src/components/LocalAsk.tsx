@@ -77,6 +77,43 @@ export function LocalAskCard(): ReactNode {
     );
   }
 
+  // A local action with standing choices (shell, file write or edit, web): the exact thing, then the same four answers.
+  if (current.local) {
+    const card = current.local;
+    return (
+      <div className="ask" role="alertdialog" aria-label={card.title}>
+        <div className="ask__head">
+          <span className="ask__warn">
+            <Icon name="alert" size={15} />
+          </span>
+          <span className="ask__title">{card.title}</span>
+          <button type="button" className="topbar__btn" title="Deny" aria-label="Deny" onClick={() => answer(false, false)}>
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+
+        <div className="ask__who">{card.label}:</div>
+        <div className="ask__detail ask__detail--exact" data-testid="local-text">{card.text}</div>
+        {card.cut ? <div className="ask__who">{card.cut}</div> : null}
+        {card.via ? <div className="ask__who">{card.via}</div> : null}
+        {card.folderLine ? <div className="ask__who">{card.folderLine}</div> : null}
+        {card.dayLine ? <div className="ask__who">{card.dayLine}</div> : null}
+        {card.note ? <div className="ask__who">{card.note}</div> : null}
+        {card.scope ? <div className="ask__who">{card.scope}</div> : null}
+
+        <div className="ask__actions">
+          {connectAnswers(card).map((a) => (
+            <button key={a.label} type="button" className={a.primary ? "btn btn--primary" : "btn"} onClick={() => answer(a.allow, a.remember)}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+        <div className="ask__more">{card.hint}</div>
+        {queue.length > 1 ? <div className="ask__more">{queue.length - 1} more waiting</div> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="ask">
       <div className="ask__head">

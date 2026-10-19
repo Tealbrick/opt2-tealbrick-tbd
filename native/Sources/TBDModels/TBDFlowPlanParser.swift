@@ -263,16 +263,21 @@ public struct TBDFlowCommitResult: Equatable, Sendable {
 extension TBDFlowStore {
     /// Saves a previewed plan as tasks, all or none. Idempotent per key (1...200 characters): the same key with the same
     /// `payloadHash` returns the first result and adds nothing; the same key with another hash throws
-    /// `.idempotencyConflict` (409 in the Tasklist API). A new key appends; it never replaces earlier tasks.
+    /// `.idempotencyConflict` (409 in the Tasklist API). A new key appends; it never replaces earlier tasks. A key whose tasks are all gone is new again.
     @discardableResult
     public func commit(drafts: [TBDFlowTaskDraft], idempotencyKey: String, payloadHash: String) throws -> TBDFlowCommitResult {
         guard (1...200).contains(idempotencyKey.count) else { throw TBDFlowError.idempotencyKeyRequired }
         guard (1...TBDFlowPlanParser.maxCommitDrafts).contains(drafts.count) else { throw TBDFlowError.invalid("Expected 1–200 drafts") }
         return try mutate { state, now in
             if let old = state.imports[idempotencyKey] {
-                guard old.sha256 == payloadHash else { throw TBDFlowError.idempotencyConflict }
                 let ids = Set(old.taskIDs)
-                return TBDFlowCommitResult(taskIDs: old.taskIDs, tasks: state.tasks.filter { ids.contains($0.id) }, replayed: true)
+                let remaining = state.tasks.filter { ids.contains($0.id) }
+                // A replay only while at least one task of the record is still in the list. When the person removed them all, the
+                // key is a stale record: the plan is new (new ids) and the record is replaced below.
+                if !remaining.isEmpty {
+                    guard old.sha256 == payloadHash else { throw TBDFlowError.idempotencyConflict }
+                    return TBDFlowCommitResult(taskIDs: old.taskIDs, tasks: remaining, replayed: true)
+                }
             }
             var created: [TBDFlowTask] = []
             for d in drafts {
@@ -286,6 +291,12 @@ extension TBDFlowStore {
             }
             state.tasks.append(contentsOf: created)
             state.imports[idempotencyKey] = TBDFlowImportRecord(sha256: payloadHash, taskIDs: created.map(\.id), at: now)
+            // Only the 500 newest records stay (the file does not grow without end); the oldest go first, the new one never.
+            if state.imports.count > TBDFlowStore.maxImportRecords {
+                let oldest = state.imports.filter { $0.key != idempotencyKey }
+                    .sorted { $0.value.at != $1.value.at ? $0.value.at < $1.value.at : $0.key < $1.key }
+                for entry in oldest.prefix(state.imports.count - TBDFlowStore.maxImportRecords) { state.imports[entry.key] = nil }
+            }
             return TBDFlowCommitResult(taskIDs: created.map(\.id), tasks: created, replayed: false)
         }
     }

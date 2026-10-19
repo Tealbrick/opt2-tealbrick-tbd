@@ -14,6 +14,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     out({ type: "event", id: m.id, event: { kind: "held", tool: "mcp__tealbrick__connect__tools_call", holdId: "hold_7", expiresAt: "2026-10-20T10:00:00Z" } });
     return out({ type: "done", id: m.id, sessionId: "sess-h", reply: "held" });
   }
+  // Local actions (shell, file write, web): a permission request for Bash with the SAME request id in every process.
+  if (m.type === "turn" && m.text === "local") {
+    (globalThis as any).connecting = m;
+    return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "Bash", detail: "Run: git status", input: { command: "git status" } });
+  }
+  if (m.type === "turn" && m.text === "local-check") {
+    (globalThis as any).connecting = m;
+    return out({ type: "permission_request", id: m.id, reqId: "p8", tool: "Bash", detail: "Run: pwd", input: { command: "pwd" }, check: true });
+  }
   if (m.type === "turn" && m.text === "connect") {
     (globalThis as any).connecting = m;
     return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "mcp__tealbrick__connect__tools_call", detail: "x", input: { tool: "gmail_send_email", arguments: {} }, connect: { op: "tools_call", tool: "gmail_send_email", account: "default", service: "Gmail", effect: "outward" } });

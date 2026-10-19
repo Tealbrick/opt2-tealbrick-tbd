@@ -254,6 +254,44 @@ final class FlowPlannerTests: FlowTestCase {
     XCTAssertEqual(try Data(contentsOf: store.url), before)
   }
 
+  // MARK: Another process writes the list (dev.17 U3: the companion CLI saves plan lines for TBD's agent)
+
+  func testTheTickShowsLinesThatAnotherProcessSavedAndKeepsThem() throws {
+    let planner = makePlanner()
+    planner.tick()
+    XCTAssertTrue(planner.tasks.isEmpty)
+
+    // The CLI is another process with its own store on the same file.
+    let cli = makeStore()
+    let drafts = try TBDFlowPlanParser.parseSchedule(
+      text: "09:45-10:30 From the agent\nTODO Call", day: day, timeZone: TimeZone(identifier: "UTC")!)
+    try cli.commit(drafts: drafts, idempotencyKey: "agent-1", payloadHash: "h")
+
+    planner.tick()  // one second later
+    XCTAssertEqual(planner.tasks.map(\.title), ["From the agent", "Call"], "the planner reloaded the file")
+    XCTAssertEqual(planner.tasks.map(\.source), [.local, .local])
+
+    // The app's own change starts from what is on disk: the agent's lines stay when the person adds one.
+    _ = try planner.addTask(title: "Mine", notes: "", day: day, startAt: nil, endAt: nil)
+    XCTAssertEqual(Set(makeStore().state.tasks.map(\.title)), ["Call", "From the agent", "Mine"])
+    // And the other writer sees the person's line the same way.
+    try cli.addTask(title: "Agent again", day: day)
+    XCTAssertEqual(Set(makeStore().state.tasks.map(\.title)), ["Call", "From the agent", "Mine", "Agent again"])
+    planner.tick()
+    XCTAssertEqual(planner.tasks.count, 4)
+  }
+
+  func testTheTickReloadsWhenTheFileChangesUnderAFreshPlanner() throws {
+    let store = makeStore()
+    let planner = makePlanner(store: store)
+    try add(store, "First", "09:00:00Z", "10:00:00Z")
+    planner.tick()
+    XCTAssertEqual(planner.tasks.count, 1)
+    try makeStore().deleteTask(id: try XCTUnwrap(planner.tasks.first).id)  // another process removes it
+    planner.tick()
+    XCTAssertTrue(planner.tasks.isEmpty)
+  }
+
   // MARK: A plan pasted late in the day makes no toasts (review 4)
 
   func testPastingAMorningPlanAt1400MakesNoToastAndNoReminder() throws {

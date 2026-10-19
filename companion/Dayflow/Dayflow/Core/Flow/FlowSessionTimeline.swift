@@ -410,6 +410,8 @@ final class FlowSessionTimeline: ObservableObject {
 
   private func save() {
     updatedAt = Date()
+    // L70: a test run or a tool run never writes the person's real TBD data (the app in its bundle may).
+    guard !TBDRealDataGuard.refuses(writingTo: fileURL) else { return }
     let file = File(
       sessionStartedAt: sessionStartedAt, updatedAt: updatedAt!, entries: entries,
       observations: observations, breaks: breaks)

@@ -37,8 +37,8 @@ final class TBDFlowStoreTests: TBDFlowTestCase {
         try store.addTask(title: "B", day: day)
         XCTAssertEqual(mode(flowURL), 0o600)
         XCTAssertEqual(mode(flowURL.deletingLastPathComponent()), 0o700)
-        let names = try FileManager.default.contentsOfDirectory(atPath: flowURL.deletingLastPathComponent().path)
-        XCTAssertEqual(names, ["flow.json"])
+        let names = try FileManager.default.contentsOfDirectory(atPath: flowURL.deletingLastPathComponent().path).sorted()
+        XCTAssertEqual(names, ["flow.json", "flow.json.lock"])
     }
 
     func testFileIsReadableJSONWithISODates() throws {

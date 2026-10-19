@@ -67,6 +67,9 @@ export class PortalError extends Error {
   }
 }
 
+/** The one sentence shown when Portal ended the session. */
+export const SESSION_ENDED_NOTICE = "Portal ended your session. Sign in again.";
+
 export const OWNER_CLIENT_ID = "tbd" as const;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code" as const;
 
@@ -96,6 +99,8 @@ export function createPortal(deps: PortalDeps) {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const base = `${new URL(deps.origin).origin}/api/v1`;
   let cancelled = false;
+  /** Set only when Portal itself ended the session (a 401). Shown once as the signed-out sentence; never a token. */
+  let ended: string | null = null;
 
   async function call<T>(method: string, path: string, body?: unknown, token?: string): Promise<T> {
     const headers: Record<string, string> = { accept: "application/json" };
@@ -126,20 +131,30 @@ export function createPortal(deps: PortalDeps) {
     return deps.store.load();
   }
 
-  /** A K3 read. A 401 means Portal ended the session (revoked, idle): sign out locally. */
+  /**
+   * A K3 read. A 401 means Portal ended the session (absolute 30 days, 24 h idle, revoked: Core answers all of them with
+   * `unauthenticated`): sign out locally. Only a 401 does this; a network error, a timeout or a 5xx never does (C7).
+   * A late 401 for a token that is no longer the saved one (the person signed in again meanwhile) changes nothing.
+   */
   async function read<T>(path: string): Promise<T> {
     const s = current();
     if (!s) throw new PortalError(401, "unauthenticated", "Not signed in.");
     try {
       return await call<T>("GET", path, undefined, s.token);
     } catch (error) {
-      if (error instanceof PortalError && error.status === 401) deps.store.save(null);
+      if (error instanceof PortalError && error.status === 401 && current()?.token === s.token) {
+        ended = SESSION_ENDED_NOTICE;
+        deps.store.save(null);
+      }
       throw error;
     }
   }
 
   return {
     session: current,
+
+    /** The signed-out sentence while Portal's end of the session is the reason; null after a new sign-in or a sign-out by the person. */
+    endedNotice: (): string | null => (current() ? null : ended),
 
     async startSignIn(): Promise<DeviceStart> {
       cancelled = false;
@@ -168,6 +183,7 @@ export function createPortal(deps: PortalDeps) {
             expiresAt: now() + token.expires_in * 1000,
             email: null,
           };
+          ended = null;
           deps.store.save(session);
           try {
             const me = await call<AccountMe>("GET", "/me", undefined, session.token);
@@ -192,6 +208,7 @@ export function createPortal(deps: PortalDeps) {
     /** Server-side revoke first (sign-out revokes, CREDENTIALS §12), then forget locally either way. */
     async signOut(): Promise<void> {
       const s = deps.store.load();
+      ended = null;
       deps.store.save(null);
       if (!s) return;
       try {

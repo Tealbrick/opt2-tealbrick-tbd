@@ -78,6 +78,9 @@ final class TBDPermissions: ObservableObject {
 }
 
 struct TBDPermissionsView: View {
+  /// The remembered Always/Never choices for TBD's agent's local actions (design shots pass a seeded store).
+  let localChoices: LocalChoicesStore?
+  init(localChoices: LocalChoicesStore? = nil) { self.localChoices = localChoices }
   @ObservedObject private var permissions = TBDPermissions.shared
   @ObservedObject private var appState = AppState.shared
 
@@ -110,6 +113,8 @@ struct TBDPermissionsView: View {
       Button("Refresh permissions") { Task { await permissions.refresh() } }
         .buttonStyle(TBDButtonStyle(.secondary))
       if !permissions.error.isEmpty { Text(permissions.error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.brickInk) }
+      SettingsLocalChoicesView(store: localChoices)
+        .padding(.top, TBDKit.s3)
     }
     .task {
       while !Task.isCancelled {

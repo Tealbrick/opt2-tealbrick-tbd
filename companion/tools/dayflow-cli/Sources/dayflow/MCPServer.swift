@@ -10,8 +10,14 @@
 //  when the user has enabled edits in Dayflow's settings, so a model can't
 //  see or attempt them otherwise.
 //
+//  The Flow plan tools (flow_plan_today, flow_plan_add) are always listed. They
+//  work on the person's local Flow list, not on Dayflow's data, and TBD's helper
+//  asks the person before a flow_plan_add "save" reaches this server.
+//
 
+import DayflowFlowTools
 import Foundation
+import TBDFlowShared
 
 private let mcpProtocolVersion = "2025-06-18"
 
@@ -172,6 +178,8 @@ private func toolDefinitions() -> [[String: Any]] {
     ],
   ]
 
+  tools += FlowPlanTools.definitions()
+
   if AgentBridge.editsEnabled {
     tools += [
       [
@@ -299,6 +307,14 @@ private func callTool(name: String, arguments: [String: Any]) -> [String: Any] {
       ])
     case "get_status":
       return try runStatusTool()
+    case let flowTool where FlowPlanTools.handles(flowTool):
+      let outcome = FlowPlanTools.call(name: flowTool, arguments: arguments, store: flowStore)
+      if outcome.isError {
+        return toolError(
+          outcome.payload["error"] as? String ?? "The Flow plan tool failed.",
+          failureCategory: outcome.failureCategory ?? "tool_error")
+      }
+      return toolResult(outcome.payload)
     case "create_category", "update_category", "delete_category",
       "update_activity", "delete_activity", "set_day_goal":
       return runWriteTool(name: name, arguments: arguments)
@@ -314,6 +330,10 @@ private func callTool(name: String, arguments: [String: Any]) -> [String: Any] {
     return toolError("Query failed: \(error)", failureCategory: "execution_error")
   }
 }
+
+/// The person's Flow list, the same file the app uses (read again at every read, locked at every change).
+// A read-only open: the plan tools that only read (flow_plan_today, flow_plan_add preview) make no lock file and move no file.
+private let flowStore = TBDFlowStore(quarantine: .onFirstWrite)
 
 private func openDB() throws -> Database {
   try Database(path: Database.defaultPath())

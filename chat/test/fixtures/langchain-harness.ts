@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createDefaultAgent, type AgentRoute } from "../../src/main/defaultAgent.ts";
+import { createDefaultAgent, type AgentRoute, type DefaultAgentDeps } from "../../src/main/defaultAgent.ts";
 import type { AgentConfig } from "../../src/agent/protocol.ts";
 
 const out = fileURLToPath(new URL("../../out/tbd/", import.meta.url));
@@ -125,7 +125,7 @@ export interface Connection { kind: string; host?: string; port?: number; path?:
  * Starts the agent as `sandbox-exec … node --import recorder bundle`, tees its raw stdout/stderr and returns the evidence.
  * `extra` adds to the agent's init config (tools, relay…); its `cwd` and `stateDir` are the test's temp folder.
  */
-export function harness(port: number, route: AgentRoute, extra: (dir: string) => Partial<Omit<AgentConfig, "model">> = () => ({})): Harness {
+export function harness(port: number, route: AgentRoute, extra: (dir: string) => Partial<Omit<AgentConfig, "model">> = () => ({}), permission: DefaultAgentDeps["permission"] = async () => ({ allow: false })): Harness {
   const dir = mkdtempSync(join(tmpdir(), "tbd-lc-e2e-"));
   const logFile = join(dir, "egress.jsonl");
   const raw = { stdout: "", stderr: "" };
@@ -140,7 +140,7 @@ export function harness(port: number, route: AgentRoute, extra: (dir: string) =>
     node: process.execPath, entry, spawnProcess,
     model: async () => route,
     config: async () => ({ cwd: dir, stateDir: join(dir, "state"), ...extra(dir) }),
-    permission: async () => ({ allow: false }),
+    permission,
   });
   return {
     agent, raw, dir,

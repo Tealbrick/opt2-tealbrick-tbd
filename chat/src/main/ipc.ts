@@ -6,12 +6,13 @@ import type { RemoteAgent } from "../shared/ipc";
 import { loadState, pickFolder, saveState } from "./store";
 import { localFileExists, openLocalFile, openRemoteFile, revealLocalFile, saveRemoteFile } from "./deliveredFile";
 import { answerAsk } from "./asks";
-import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, consentStore, consentWorkspace, ensurePerson, getServices, removeAgentFolder, resetServices, saveAttachment } from "./services";
+import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, consentStore, consentWorkspace, ensurePerson, getServices, localConsentStore, startSessionKeepAlive, removeAgentFolder, resetServices, saveAttachment } from "./services";
 import { connectMcp } from "@opt2-tealbrick/bridge";
 import { knowledgeSave, type KnowledgeSaveInput } from "./knowledgeSave";
 import { flowTaskBoardComplete, flowTaskBoardList } from "./flowTaskBoard";
 import { connectAccounts } from "./connectAccounts";
 import { consentListing, workspaceKey } from "./connectConsent";
+import { localConsentListing } from "./localConsent";
 import { holdLink, holdProduct } from "./connectHold";
 import { dialog } from "../tbd/host";
 import { publicPersonSession } from "./portal";
@@ -87,6 +88,7 @@ function flowCompleteInput(raw: unknown): { issue: string; result: string } {
 }
 
 export function registerIpc(): void {
+  startSessionKeepAlive();
   const signedIn = () => Boolean(getServices().portal.session());
   ipcMain.handle("studio:portalWorkspaces", withPerson(() => portalWorkspaces()));
   ipcMain.handle("studio:selectPortalWorkspace", withPerson((_e: unknown, id: string) => selectPortalWorkspace(id)));
@@ -105,6 +107,9 @@ export function registerIpc(): void {
     const s = publicPersonSession(getServices().portal.session());
     return s ? { expiresAt: s.expiresAt, email: s.email ?? undefined } : null;
   }));
+
+  // C7: why the person is signed out, when Portal ended the session (one sentence, no token); null otherwise.
+  ipcMain.handle("studio:sessionNotice", withPerson(async () => getServices().portal.endedNotice()));
 
   // Person sign-in: device flow client_id=tbd, scope=owner. The approval page opens in the system browser.
   ipcMain.handle("studio:signIn", withPerson(async () => {
@@ -257,6 +262,18 @@ export function registerIpc(): void {
     const ws = consentKey();
     if (ws) consentStore().revoke(ws, r.account, r.tool);
     return consentRules();
+  });
+
+  // The person's "Always allow" / "Never allow" choices for TBD's agent's local actions (Settings › Access): shell commands, file
+  // writes, web requests. A local file (local-consent.json), the same for every workspace; no Portal, no relay. The answer is
+  // `{ choices: [{ key, decision, at }], unreadable }`.
+  ipcMain.handle("studio:localConsentList", () => localConsentListing(localConsentStore()));
+  ipcMain.handle("studio:localConsentRevoke", (_e, raw: unknown) => {
+    const r = (raw ?? {}) as Record<string, unknown>;
+    if (typeof r.key !== "string" || !r.key) throw new Error("Choose the choice to forget.");
+    const store = localConsentStore();
+    store.revoke(r.key);
+    return localConsentListing(store);
   });
 
   // Approvals: counts only (S2/C24); the hold pages open in the system browser.
