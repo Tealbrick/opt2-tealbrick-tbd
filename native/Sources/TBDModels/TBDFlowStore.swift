@@ -14,6 +14,10 @@ public struct TBDFlowTickResult: Equatable, Sendable {
 ///
 /// - Thread-safe: one lock around the state, so the @MainActor UI and a background `tick` may both call it. Every method
 ///   is atomic: the new state is written first and replaces the old one only if the write worked.
+/// - Safe between processes (the app and the companion CLI both write the file): every change runs under an exclusive
+///   `flock` on the sibling `flow.json.lock`, and first reloads the file when it changed on disk since this store last
+///   read or wrote it (inode, size and modification time). So two writers never lose an update. `reloadIfChanged()` is
+///   the cheap check a reader (the app's one-second tick) uses to see the other writer's changes.
 /// - The file is written atomically (temp file in the same folder, then rename), mode 0600, in a folder of mode 0700.
 /// - A file that cannot be read is moved aside to `flow.json.corrupt-<timestamp>` (renamed, never deleted) and Flow
 ///   starts empty; `corruptBackupURL` tells the app so it can say so. If the file cannot be moved aside, the store
@@ -40,6 +44,21 @@ public final class TBDFlowStore: @unchecked Sendable {
     private var current: TBDFlowState
     private var movedAside: URL?
     private var unreadableAndKept = false
+    /// What the file looked like (nil: no file) when `current` was read from it or written to it.
+    private var seen: FileSignature?
+    /// The open lock file (`flow.json.lock`), opened on first use and kept for the life of the store.
+    private var lockFD: Int32 = -1
+
+    /// How long a change waits for the other process's lock before it gives up.
+    nonisolated(unsafe) static var lockTimeout: TimeInterval = 10
+
+    /// Enough to tell that another process replaced the file: every save is a rename of a new file, so the inode changes.
+    struct FileSignature: Equatable {
+        var inode: UInt64
+        var size: Int64
+        var seconds: Int
+        var nanoseconds: Int
+    }
 
     public init(url: URL = TBDFlowStore.defaultURL, clock: @escaping @Sendable () -> Date = { Date() },
                 makeID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() }) {
@@ -47,8 +66,11 @@ public final class TBDFlowStore: @unchecked Sendable {
         self.clock = clock
         self.makeID = makeID
         self.current = TBDFlowState()
-        self.current = loadFromDisk()
+        // The first read takes the lock too: two processes must not both move an unreadable file aside.
+        _ = try? withFileLock(createFolder: false) { reloadLocked() }
     }
+
+    deinit { if lockFD >= 0 { close(lockFD) } }
 
     /// A copy of the state.
     public var state: TBDFlowState { locked { current } }
@@ -84,6 +106,72 @@ public final class TBDFlowStore: @unchecked Sendable {
         return TBDFlowState()
     }
 
+    private static func signature(of url: URL) -> FileSignature? {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        return FileSignature(inode: UInt64(info.st_ino), size: Int64(info.st_size),
+                             seconds: info.st_mtimespec.tv_sec, nanoseconds: info.st_mtimespec.tv_nsec)
+    }
+
+    /// Reads the file again when it is not the one `current` came from. Caller holds the state lock (and, for a change,
+    /// the file lock). Returns whether the state is now different.
+    @discardableResult
+    private func reloadLocked() -> Bool {
+        // The signature is taken BEFORE the read: a file replaced in between is seen as changed next time, never missed.
+        let signature = Self.signature(of: url)
+        if signature == seen { return false }
+        let before = current
+        unreadableAndKept = false
+        current = loadFromDisk()
+        seen = FileManager.default.fileExists(atPath: url.path) ? signature : nil
+        return current != before
+    }
+
+    /// The file lock: blocks (up to `lockTimeout`) while another process or store holds it. Throws `.storage` when the lock
+    /// file cannot be opened or the wait ends.
+    private func withFileLock<T>(createFolder: Bool, _ body: () throws -> T) throws -> T {
+        if lockFD < 0 {
+            let dir = url.deletingLastPathComponent()
+            if createFolder { try ensureFolder(dir) } else if !FileManager.default.fileExists(atPath: dir.path) { return try body() }
+            let fd = open(url.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+            guard fd >= 0 else {
+                // A change needs the lock. A read does not: files are replaced by rename, so a reader never sees half a file.
+                if createFolder { throw TBDFlowError.storage("Flow could not open its lock file") }
+                return try body()
+            }
+            lockFD = fd
+        }
+        let deadline = Date().addingTimeInterval(Self.lockTimeout)
+        while flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
+            if errno != EWOULDBLOCK && errno != EINTR { throw TBDFlowError.storage("Flow could not lock the list") }
+            if Date() > deadline { throw TBDFlowError.storage("Flow could not save the list: another part of TBD is using it. Try again.") }
+            usleep(5_000)
+        }
+        defer { flock(lockFD, LOCK_UN) }
+        return try body()
+    }
+
+    private func ensureFolder(_ dir: URL) throws {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: dir.path) else { return }
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        } catch {
+            throw TBDFlowError.storage("Flow could not save the list: \(error.localizedDescription)")
+        }
+    }
+
+    /// For a reader (the app's one-second tick): reads the file again when another process changed it. Returns whether the
+    /// state is now different. Never throws; a lock that cannot be had means "not now".
+    @discardableResult
+    public func reloadIfChanged() -> Bool {
+        locked {
+            if Self.signature(of: url) == seen { return false }
+            return (try? withFileLock(createFolder: false) { reloadLocked() }) ?? false
+        }
+    }
+
     private static func stamp(_ date: Date) -> String {
         let c = Calendar(identifier: .gregorian)
         var utc = c
@@ -99,10 +187,7 @@ public final class TBDFlowStore: @unchecked Sendable {
         let fm = FileManager.default
         let dir = url.deletingLastPathComponent()
         do {
-            if !fm.fileExists(atPath: dir.path) {
-                try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
-            }
+            try ensureFolder(dir)
             let data = try TBDFlowCoding.encoder().encode(state)
             let temp = dir.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
             guard fm.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
@@ -124,13 +209,18 @@ public final class TBDFlowStore: @unchecked Sendable {
     @discardableResult
     func mutate<T>(now override: Date? = nil, _ body: (inout TBDFlowState, Date) throws -> T) throws -> T {
         lock.lock(); defer { lock.unlock() }
-        var next = current
-        let result = try body(&next, override ?? clock())
-        if next != current {
-            try write(next)
-            current = next
+        return try withFileLock(createFolder: true) {
+            // Another process may have saved since this store last looked: start from what is on disk now.
+            reloadLocked()
+            var next = current
+            let result = try body(&next, override ?? clock())
+            if next != current {
+                try write(next)
+                current = next
+                seen = Self.signature(of: url)
+            }
+            return result
         }
-        return result
     }
 
     func newID() -> String { makeID() }

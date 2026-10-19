@@ -198,7 +198,7 @@ async function permission(req: { tool: string; detail: string; input: Record<str
     checkOnly: req.check === true,
     askPerson: (card, target) => askPerson({
       id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent",
-      action: target.kind === "shell" ? "run-command" : target.kind === "write" ? "write-file" : "web-request", label: card.title, detail: "", local: card,
+      action: target.kind === "shell" ? "run-command" : target.kind === "write" ? "write-file" : target.kind === "plan" ? "plan-add" : "web-request", label: card.title, detail: "", local: card,
     }, signal),
   });
   if (local) return local;

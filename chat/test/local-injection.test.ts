@@ -162,18 +162,22 @@ test("local: a protected location in a read-only command is refused before it ru
   assert.ok(r.lastTool().includes("protected location"), r.lastTool());
 });
 
-test("local: a web fetch asks with the host and says it leaves this Mac; Always allow covers that host, Never another", { skip, timeout: 180_000 }, async () => {
+test("local: a web fetch asks with the address; an address on this Mac gets no Always (ask every time); Never is remembered", { skip, timeout: 180_000 }, async () => {
   // Port 1 is closed: nothing can answer, and nothing leaves this Mac. The fetch fails after the card; the card is what is tested.
+  // dev.17: localhost and IP numbers never get Always, so an "Always" answer counts once and the same host asks again.
   const fetchOf = (url: string): ModelStep => ({ name: "WebFetch", input: { url, prompt: "x" } });
-  const r = await run(() => [fetchOf("http://127.0.0.1:1/a"), fetchOf("http://127.0.0.1:1/b"), fetchOf("http://localhost:1/c")], { answers: ["always", "never"] });
-  assert.equal(r.seen.length, 2, "the second URL of the same host needed no card");
+  const r = await run(() => [fetchOf("http://127.0.0.1:1/a"), fetchOf("http://127.0.0.1:1/b"), fetchOf("http://localhost:1/c"), fetchOf("http://localhost:1/d")], { answers: ["always", "never", "approve"] });
+  assert.equal(r.seen.length, 4, "every URL asked, also the second one of the same host: no Always for these addresses");
   assert.equal(r.seen[0].card.title, "Allow TBD's agent to fetch from 127.0.0.1?");
   assert.equal(r.seen[0].card.text, "http://127.0.0.1:1/a");
-  assert.equal(r.seen[0].card.leavesMac, true);
-  assert.equal(r.seen[0].card.alwaysOffered, true);
-  assert.equal(r.seen[1].card.title, "Allow TBD's agent to fetch from localhost?");
-  assert.equal(r.store.decision("web:127.0.0.1"), "always");
-  assert.equal(r.store.decision("web:localhost"), "never");
+  assert.equal(r.seen[0].card.alwaysOffered, false);
+  assert.equal(r.seen[0].card.hint, "TBD asks every time for this kind of action.");
+  assert.equal(r.seen[0].card.leavesMac, false, "a request to this Mac does not leave it");
+  assert.equal(r.store.decision("web:127.0.0.1"), "never", "the second answer was Never");
+  assert.equal(r.seen[1].card.title, "Allow TBD's agent to fetch from 127.0.0.1?");
+  assert.equal(r.seen[2].card.title, "Allow TBD's agent to fetch from localhost?");
+  assert.equal(r.seen[3].card.title, "Allow TBD's agent to fetch from localhost?");
+  assert.equal(r.store.decision("web:localhost"), null, "an approve counts once");
 });
 
 test("local: a file write asks per folder; Always allow covers that folder; a folder outside the agent's folders gets no Always", { skip, timeout: 180_000 }, async () => {

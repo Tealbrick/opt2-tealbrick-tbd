@@ -41,3 +41,38 @@ export function localPreToolUse(seams: LocalHookSeams) {
     }
   };
 }
+
+// ---------------------------------------------------------------- the plan tool (flow_plan_add)
+
+export interface FlowPlanHookSeams {
+  /** Whether this call writes to the person's plan and so needs the person: `needsPermission` for the Companion plan tool. */
+  needsAsk(tool: string, input: Record<string, unknown>): boolean;
+  /** The helper's decision: the person's Always/Never for `flow:add`, else the card. May throw. */
+  request(tool: string, input: Record<string, unknown>, signal: AbortSignal): Promise<{ allow: boolean; message?: string }>;
+  /** TEST ONLY: true switches the ask off (the negative control of the injection fixture). */
+  disabled?: () => boolean;
+}
+
+type FlowHookOutput = Record<string, never> | { hookSpecificOutput: { hookEventName: "PreToolUse"; permissionDecision: "allow" | "deny"; permissionDecisionReason?: string } };
+
+/**
+ * `flow_plan_add` in the Claude Agent SDK. The Companion tools are on the SDK's allow list, so the SDK never calls canUseTool for
+ * them: a "save" is decided here, in a PreToolUse hook, like a Connect call. A "preview" and `flow_plan_today` pass at once.
+ * "deny" is final, and so is any error inside the hook. The explicit "allow" after the person agreed keeps the SDK from asking again.
+ */
+export function flowPlanPreToolUse(seams: FlowPlanHookSeams) {
+  return async (hook: PreToolHookInput, _toolUseId: string | undefined, options: { signal: AbortSignal }): Promise<FlowHookOutput> => {
+    if (hook.hook_event_name !== "PreToolUse") return {};
+    try {
+      const tool = String(hook.tool_name ?? "");
+      const input = (hook.tool_input && typeof hook.tool_input === "object" ? hook.tool_input : {}) as Record<string, unknown>;
+      if (seams.disabled?.() === true || !seams.needsAsk(tool, input)) return {};
+      const decision = await seams.request(tool, input, options.signal);
+      return decision.allow
+        ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
+        : deny(decision.message ?? "The person declined this action.");
+    } catch {
+      return deny(LOCAL_HOOK_FAILED_MESSAGE);
+    }
+  };
+}

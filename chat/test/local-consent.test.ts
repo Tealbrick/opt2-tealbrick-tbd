@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ALWAYS_HINT, EVERY_TIME_LINE, MAX_CORRUPT_COPIES, SHELL_COMMAND_MAX, buildLocalCard, cleanLocalText, createLocalConsentStore, decideLocalCall, isLocalConsentTool,
-  localConsentListing, localNeverMessage, localTarget, normaliseKey, shellAlways, type LocalTarget,
+  localConsentListing, localNeverMessage, localTarget, normaliseKey, shellAlways, webAlwaysVerdict, type LocalTarget,
 } from "../src/main/localConsent.ts";
 import { decide, writeScope, type PolicyContext } from "../src/main/filePolicy.ts";
 
@@ -109,14 +109,19 @@ describe("keys", () => {
     }
   });
   test("web: the host in lower case, no port, no user part; websearch has one key", () => {
-    const a = localTarget("WebFetch", { url: "https://Example.COM:8443/a/b?q=1" }, nowhere);
+    const a = localTarget("WebFetch", { url: "https://Example.COM/a/b?q=1" }, nowhere);
     assert.ok(a && "key" in a);
     assert.equal(a.key, "web:example.com");
     assert.equal(a.alwaysOk, true);
-    assert.equal(a.text, "https://Example.COM:8443/a/b?q=1");
+    assert.equal(a.text, "https://Example.COM/a/b?q=1");
+    const port = localTarget("WebFetch", { url: "https://Example.COM:8443/a/b?q=1" }, nowhere);
+    assert.ok(port && "key" in port);
+    assert.equal(port.key, "web:example.com", "the key has no port");
+    assert.equal(port.alwaysOk, false, "but a special port gets no Always");
     const trick = localTarget("WebFetch", { url: "https://good.com@evil.example/x" }, nowhere);
     assert.ok(trick && "key" in trick);
     assert.equal(trick.key, "web:evil.example", "the part before @ is not the host");
+    assert.equal(trick.alwaysOk, false, "an address with a user part gets no Always");
     const idn = localTarget("WebFetch", { url: "https://exаmple.com/" }, nowhere); // Cyrillic a
     assert.ok(idn && "key" in idn && idn.key.startsWith("web:xn--"), "an international host shows as punycode");
     const s = localTarget("WebSearch", { query: "tbd" }, nowhere);
@@ -216,6 +221,127 @@ describe("keys", () => {
     const w = world();
     assert.equal(decide("MultiEdit", { file_path: join(w.home, ".ssh/id_ed25519") }, w.ctx).kind, "deny");
     assert.equal(decide("MultiEdit", { file_path: join(w.proj, "a.ts") }, w.ctx).kind, "ask");
+  });
+});
+
+describe("web: which addresses never get Always (ask every time)", () => {
+  const nowhere = () => null;
+  const verdict = (url: string) => webAlwaysVerdict(new URL(url));
+  const ALWAYS = [
+    "https://example.com/", "http://example.com/a?b=c", "https://docs.example.co.uk/x", "https://EXAMPLE.com", "https://example.com:443/x", "http://example.com:80/x",
+    "https://sub.domain.example.org/path#frag", "https://xn--exmple-cua.com/", "https://a.b.c.d.example.com/", "https://localhost.example.com/", "https://mylocal.example.com/",
+    "https://local.example.com/", "https://notlocalhost.example/", "https://example.localhost.example.com/",
+  ];
+  for (const url of ALWAYS) test(`Always possible: ${url}`, () => assert.deepEqual(verdict(url), { always: true }, url));
+
+  // [url, "mac" (on this Mac) | "lan" (own network) | "ip" (a bare public number) | "user" | "port"]
+  const NOT: [string, string][] = [
+    // localhost and its relatives
+    ["http://localhost/", "mac"], ["http://localhost:3000/", "mac"], ["http://LOCALHOST/", "mac"], ["http://localhost./", "mac"], ["http://app.localhost/", "mac"], ["https://a.b.localhost/", "mac"],
+    ["http://x.LOCALHOST:8080/", "mac"],
+    // .local and one-word names
+    ["http://printer.local/", "lan"], ["https://Mac-Mini.LOCAL/", "lan"], ["http://printer.local./", "lan"], ["http://router/", "lan"], ["http://nas/share", "lan"], ["http://intranet:8080/", "lan"],
+    // IPv4 literals: loopback, private, link-local, and any other number
+    ["http://127.0.0.1/", "mac"], ["http://127.1.2.3/", "mac"], ["http://127.255.255.255/", "mac"], ["http://127.1/", "mac"], ["http://2130706433/", "mac"], ["http://0x7f.0.0.1/", "mac"], ["http://0177.0.0.1/", "mac"],
+    ["http://10.0.0.1/", "lan"], ["http://10.255.255.255/", "lan"], ["http://172.16.0.1/", "lan"], ["http://172.31.255.255/", "lan"], ["http://192.168.0.1/", "lan"], ["http://192.168.255.1:80/", "lan"],
+    ["http://169.254.169.254/latest/meta-data/", "lan"], ["http://169.254.0.1/", "lan"], ["http://100.64.0.1/", "lan"], ["http://0.0.0.0/", "lan"],
+    ["http://172.15.255.255/", "ip"], ["http://172.32.0.1/", "ip"], ["http://8.8.8.8/", "ip"], ["https://1.1.1.1/dns-query", "ip"], ["http://192.169.0.1/", "ip"], ["http://11.0.0.1/", "ip"], ["http://169.253.1.1/", "ip"],
+    ["http://134744072/", "ip"], // 8.8.8.8 written as one number
+    // IPv6 literals
+    ["http://[::1]/", "mac"], ["http://[::1]:8080/", "mac"], ["http://[0:0:0:0:0:0:0:1]/", "mac"], ["http://[::]/", "mac"], ["http://[::ffff:127.0.0.1]/", "mac"],
+    ["http://[fc00::1]/", "lan"], ["http://[fd12:3456:789a::1]/", "lan"], ["http://[fdff:ffff::1]/", "lan"], ["http://[fe80::1]/", "lan"], ["http://[febf::1]/", "lan"], ["http://[::ffff:10.0.0.1]/", "lan"],
+    ["http://[::ffff:192.168.1.1]/", "lan"], ["http://[::ffff:169.254.1.1]/", "lan"],
+    ["http://[2001:db8::1]/", "ip"], ["https://[2606:4700:4700::1111]/", "ip"], ["http://[fec0::1]/", "ip"], ["http://[fbff::1]/", "ip"], ["http://[::ffff:8.8.8.8]/", "ip"],
+    // a user name or password in the address
+    ["https://user@example.com/", "user"], ["https://user:pass@example.com/", "user"], ["https://:pass@example.com/", "user"], ["https://good.com@evil.example/", "user"], ["http://admin@example.org/x", "user"],
+    // a port other than the default
+    ["https://example.com:8443/", "port"], ["http://example.com:8080/", "port"], ["https://example.com:80/", "port"], ["http://example.com:443/", "port"], ["http://example.com:1/", "port"], ["https://api.example.com:65535/", "port"],
+  ];
+  const REASON: Record<string, RegExp> = { mac: /on this Mac/, lan: /your own network/, ip: /a number/, user: /user name or password/, port: /special port/ };
+  for (const [url, kind] of NOT) {
+    test(`no Always (${kind}): ${url}`, () => {
+      const v = verdict(url);
+      assert.equal(v.always, false, url);
+      if (!v.always) {
+        assert.match(v.reason, REASON[kind], url);
+        assert.equal(v.onThisMac, kind === "mac", url);
+      }
+    });
+  }
+  test("the table is big enough", () => assert.ok(ALWAYS.length + NOT.length >= 80, String(ALWAYS.length + NOT.length)));
+
+  test("a user part and a port on a local address keep the local reason (the first thing the person should know)", () => {
+    assert.match((verdict("http://user@localhost:3000/") as { reason: string }).reason, /on this Mac/);
+    assert.match((verdict("http://user@10.0.0.1/") as { reason: string }).reason, /your own network/);
+  });
+
+  test("localTarget: the key is still the host; alwaysOk and the reason follow the address", () => {
+    const local = localTarget("WebFetch", { url: "http://localhost:3000/admin" }, nowhere);
+    assert.ok(local && "key" in local);
+    assert.equal(local.key, "web:localhost");
+    assert.equal(local.alwaysOk, false);
+    assert.equal(local.leavesMac, false);
+    assert.match(local.why ?? "", /on this Mac/);
+    const v6 = localTarget("WebFetch", { url: "http://[::1]:9000/" }, nowhere);
+    assert.ok(v6 && "key" in v6);
+    assert.equal(v6.key, "web:[::1]");
+    assert.equal(v6.alwaysOk, false);
+    const lan = localTarget("WebFetch", { url: "http://192.168.1.1/" }, nowhere);
+    assert.ok(lan && "key" in lan);
+    assert.equal(lan.alwaysOk, false);
+    assert.equal(lan.leavesMac, true);
+    const fine = localTarget("WebFetch", { url: "https://example.com/" }, nowhere);
+    assert.ok(fine && "key" in fine);
+    assert.equal(fine.alwaysOk, true);
+    assert.equal(fine.why, undefined);
+  });
+
+  test("the card: no Always button, the every-time line, the reason; it still names the address", () => {
+    const t = localTarget("WebFetch", { url: "http://10.0.0.5:8080/status" }, nowhere);
+    assert.ok(t && "key" in t);
+    const card = buildLocalCard(t);
+    assert.equal(card.alwaysOffered, false);
+    assert.equal(card.hint, "TBD asks every time for this kind of action.");
+    assert.equal(card.scope, undefined);
+    assert.equal(card.text, "http://10.0.0.5:8080/status");
+    assert.equal(card.title, "Allow TBD's agent to fetch from 10.0.0.5?");
+    assert.match(card.note ?? "", /your own network/);
+    assert.equal(card.leavesMac, true);
+    const mac = localTarget("WebFetch", { url: "http://localhost:3000/" }, nowhere);
+    assert.ok(mac && "key" in mac);
+    const macCard = buildLocalCard(mac);
+    assert.equal(macCard.leavesMac, false, "a request to this Mac does not leave it");
+    assert.doesNotMatch(macCard.note ?? "", /leaves this Mac/);
+    assert.equal(macCard.hint, EVERY_TIME_LINE);
+    const ok = localTarget("WebFetch", { url: "https://example.com/" }, nowhere);
+    assert.ok(ok && "key" in ok);
+    assert.equal(buildLocalCard(ok).alwaysOffered, true, "an ordinary address still offers Always");
+  });
+
+  test("a stored Always for a host does not carry to a call that no longer allows it; a stored Never still does", async () => {
+    const w = world();
+    const store = w.store();
+    store.remember("web:localhost", "always");
+    store.remember("web:example.com", "always");
+    const { deps, cards } = w.deps(store, [{ allow: true, remember: true }, { allow: false, remember: false }]);
+    // example.com: Always works on the default port, and asks again with a special port
+    assert.deepEqual(await decideLocalCall({ tool: "WebFetch", input: { url: "https://example.com/a" } }, deps), { allow: true, remember: "always" });
+    assert.equal(cards.length, 0);
+    const port = await decideLocalCall({ tool: "WebFetch", input: { url: "https://example.com:8443/a" } }, deps);
+    assert.equal(port?.allow, true, "the person approved this one");
+    assert.equal(cards.length, 1, "a card for the special port, in spite of the stored Always");
+    assert.equal(cards[0].card.alwaysOffered, false);
+    // the answer "Always" to a card without Always counts once and is not stored
+    assert.equal(port?.remember, undefined);
+    // localhost: the stored Always does not apply
+    const lh = await decideLocalCall({ tool: "WebFetch", input: { url: "http://localhost/x" } }, deps);
+    assert.equal(lh?.allow, false);
+    assert.equal(cards.length, 2);
+    // a stored Never for the host still denies, whatever the address
+    store.remember("web:evil.example", "never");
+    const never = await decideLocalCall({ tool: "WebFetch", input: { url: "https://evil.example:8443/x" } }, deps);
+    assert.deepEqual(never, { allow: false, message: "The person told TBD never to allow fetching from evil.example.", remember: "never" });
+    assert.equal(cards.length, 2);
   });
 });
 

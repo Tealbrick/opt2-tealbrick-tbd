@@ -97,6 +97,7 @@ export function LocalAskCard(): ReactNode {
         {card.cut ? <div className="ask__who">{card.cut}</div> : null}
         {card.via ? <div className="ask__who">{card.via}</div> : null}
         {card.folderLine ? <div className="ask__who">{card.folderLine}</div> : null}
+        {card.dayLine ? <div className="ask__who">{card.dayLine}</div> : null}
         {card.note ? <div className="ask__who">{card.note}</div> : null}
         {card.scope ? <div className="ask__who">{card.scope}</div> : null}
 

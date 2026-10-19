@@ -84,7 +84,7 @@ export interface AgentProfile {
 // Must match LOCAL_ACTIONS in main/localExec.ts, which is the enforcement side.
 // "local-mcp" was missing here, so the renderer's type claimed an action it can
 // actually receive was impossible — a lie directly under a permission boundary.
-export type LocalAction = "run-command" | "read-file" | "write-file" | "list-directory" | "local-mcp" | "connect-call" | "web-request";
+export type LocalAction = "run-command" | "read-file" | "write-file" | "list-directory" | "local-mcp" | "connect-call" | "web-request" | "plan-add";
 export type LocalPermission = "always" | "ask" | "never";
 
 /** What the Connect consent card shows (C11): built in the helper from the call's arguments, never from the model's own words. */
@@ -118,7 +118,7 @@ export interface ConnectCard {
  */
 export interface LocalCard {
   title: string;
-  /** What `text` is: "Command", "File", "Address" or "Search". */
+  /** What `text` is: "Command", "File", "Address", "Search" or "Plan". */
   label: string;
   /** The exact command, file path, address or search words (bidi and control characters removed; a cut is marked with "…"). */
   text: string;
@@ -126,6 +126,8 @@ export interface LocalCard {
   cut?: string;
   /** "Folder: …" for a file. */
   folderLine?: string;
+  /** "Day: yyyy-MM-dd" for lines added to the plan. */
+  dayLine?: string;
   /** "Named as: …" when the agent named the file by a link, `~` or a relative path. */
   via?: string;
   /** What "Always allow" covers (only when it is offered). */

@@ -31,6 +31,7 @@ export const ASK_PERSON = "ask_person";
 /** The line shown to the person while a tool runs (same wording as the SDK agent). */
 export function toolLabel(name: string): string {
   if (name === ASK_PERSON) return "Asking you a question";
+  if (name.startsWith("mcp__companion__flow_plan_")) return name.endsWith("_add") ? "Planning your day" : "Reading your plan";
   if (name.startsWith("mcp__companion__")) return "Reading your timeline";
   if (name.startsWith("mcp__listening__")) return "Reading your transcripts";
   if (name.startsWith("mcp__tealbrick__")) return "Using a Teal Brick app";
@@ -40,8 +41,8 @@ export function toolLabel(name: string): string {
 // ---------------------------------------------------------------- permission and question round trips
 
 export interface PermissionPolicy {
-  /** protocol.needsPermission: whether TBD's helper must decide this call. */
-  needsPermission(tool: string): boolean;
+  /** protocol.needsPermission: whether TBD's helper must decide this call (`input`: the plan tool is free only in preview mode). */
+  needsPermission(tool: string, input?: Record<string, unknown>): boolean;
   /** protocol.describeToolCall: one line for the consent card. */
   describe(tool: string, input: Record<string, unknown>): string;
   /**
@@ -80,7 +81,7 @@ export function createInteractions(send: (m: AgentToHelper) => void, policy: Per
     async gate(turnId: string, name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<Decision> {
       try {
         const connect = policy.connect?.(name, input);
-        if (!connect && !policy.needsPermission(name)) return { allow: true };
+        if (!connect && !policy.needsPermission(name, input)) return { allow: true };
         const reqId = ids.permission();
         send({ type: "permission_request", id: turnId, reqId, tool: name, detail: policy.describe(name, input), input, ...(connect ? { connect } : {}) });
         return await wait(permissions, reqId, signal, { allow: false, message: "Turn stopped." });

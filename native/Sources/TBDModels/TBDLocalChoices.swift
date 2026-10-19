@@ -1,15 +1,15 @@
 import Foundation
 
 /// The person's standing choices for TBD's agent's LOCAL actions on this Mac (dev.17, C280 C13 local part): "Always allow" and
-/// "Never allow" for shell commands, file writes and web requests. They live in the Chat helper's `local-consent.json` (the same for
+/// "Never allow" for shell commands, file writes, web requests and adding lines to the plan. They live in the Chat helper's `local-consent.json` (the same for
 /// every workspace) and show in Settings › Access. The app only decides what to say; the helper decides what a choice covers.
 /// Choices for connected accounts are in Settings › Connectors (`TBDConnectorChoice`).
 
 /// One remembered local choice. The helper's rule key says what it covers: `shell:<exact command>`, `write:<folder>`, `web:<host>`,
-/// `websearch`.
+/// `websearch`, `flow:add` (the agent adds lines to the person's plan on this Mac).
 public struct TBDLocalChoice: Equatable, Identifiable, Sendable {
     public enum Decision: String, Equatable, Sendable { case always, never }
-    public enum Kind: Equatable, Sendable { case shell, write, web, search }
+    public enum Kind: Equatable, Sendable { case shell, write, web, search, plan }
 
     public var key: String
     public var decision: Decision
@@ -18,7 +18,7 @@ public struct TBDLocalChoice: Equatable, Identifiable, Sendable {
         self.key = key; self.decision = decision
     }
 
-    /// nil when the value is not the helper's shape or the key is none of the four kinds.
+    /// nil when the value is not the helper's shape or the key is none of the five kinds.
     public init?(helperValue: Any?) {
         guard let o = helperValue as? [String: Any], let key = o["key"] as? String, let raw = o["decision"] as? String,
               let decision = Decision(rawValue: raw), Self.kind(of: key) != nil else { return nil }
@@ -29,6 +29,7 @@ public struct TBDLocalChoice: Equatable, Identifiable, Sendable {
 
     public static func kind(of key: String) -> Kind? {
         if key == "websearch" { return .search }
+        if key == "flow:add" { return .plan }
         if key.hasPrefix("shell:"), key.count > 6 { return .shell }
         if key.hasPrefix("write:/"), key.count > 7 { return .write }
         if key.hasPrefix("web:"), key.count > 4 { return .web }
@@ -41,7 +42,7 @@ public struct TBDLocalChoice: Equatable, Identifiable, Sendable {
     public static let displayMax = 200
 
     /// "Always allow · Run `npm test`", "Never allow · Write in ~/Projects/x", "Always allow · Fetch from example.com",
-    /// "Always allow · Search the web". The home folder shows as "~". Characters that change how a line reads (bidirectional and
+    /// "Always allow · Search the web", "Always allow · Add lines to your plan". The home folder shows as "~". Characters that change how a line reads (bidirectional and
     /// control characters) are removed and line breaks show as "⏎".
     public func text(home: String = NSHomeDirectory()) -> String {
         let lead = decision == .always ? "Always allow" : "Never allow"
@@ -54,6 +55,8 @@ public struct TBDLocalChoice: Equatable, Identifiable, Sendable {
             return "\(lead) · Fetch from \(Self.shown(String(key.dropFirst(4))))"
         case .search:
             return "\(lead) · Search the web"
+        case .plan:
+            return "\(lead) · Add lines to your plan"
         }
     }
 

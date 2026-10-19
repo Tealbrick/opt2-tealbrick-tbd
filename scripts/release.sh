@@ -57,6 +57,12 @@ xcodebuild test -project "$TBD_ROOT/companion/Dayflow/Dayflow.xcodeproj" -scheme
   CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= > "$LOGS/dayflow-tests.log" 2>&1 \
   || die "DayflowTests failed; see $LOGS/dayflow-tests.log"
 
+# The companion CLI (MCP server: Flow plan tools) has its own SwiftPM tests. No dependencies, no network.
+step "Gate: companion CLI tests (log: $LOGS/dayflow-cli-tests.log)"
+env -i DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}" HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+  /usr/bin/swift test --package-path "$TBD_ROOT/companion/tools/dayflow-cli" > "$LOGS/dayflow-cli-tests.log" 2>&1 \
+  || die "companion CLI tests failed; see $LOGS/dayflow-cli-tests.log"
+
 step "Assemble (chat, app, tbd-listen, helpers; logs: $LOGS)"
 rm -rf "$APP"
 source "$TBD_ROOT/scripts/assemble.sh"

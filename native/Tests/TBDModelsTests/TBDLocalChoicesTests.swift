@@ -10,6 +10,8 @@ final class TBDLocalChoicesTests: XCTestCase {
         XCTAssertEqual(TBDLocalChoice(key: "web:example.com", decision: .always).text(home: home), "Always allow · Fetch from example.com")
         XCTAssertEqual(TBDLocalChoice(key: "websearch", decision: .always).text(home: home), "Always allow · Search the web")
         XCTAssertEqual(TBDLocalChoice(key: "shell:rm -rf build", decision: .never).text(home: home), "Never allow · Run `rm -rf build`")
+        XCTAssertEqual(TBDLocalChoice(key: "flow:add", decision: .always).text(home: home), "Always allow · Add lines to your plan")
+        XCTAssertEqual(TBDLocalChoice(key: "flow:add", decision: .never).text(home: home), "Never allow · Add lines to your plan")
     }
 
     func testTheHomeFolderShowsAsTildeOnlyAtAFolderBoundary() {
@@ -48,6 +50,8 @@ final class TBDLocalChoicesTests: XCTestCase {
         XCTAssertEqual(TBDLocalChoice.kind(of: "write:/a"), .write)
         XCTAssertEqual(TBDLocalChoice.kind(of: "web:a.example"), .web)
         XCTAssertEqual(TBDLocalChoice.kind(of: "websearch"), .search)
+        XCTAssertEqual(TBDLocalChoice.kind(of: "flow:add"), .plan)
+        XCTAssertNil(TBDLocalChoice.kind(of: "flow:other"))
         XCTAssertNil(TBDLocalChoice.kind(of: "gmail_send_email"))
     }
 

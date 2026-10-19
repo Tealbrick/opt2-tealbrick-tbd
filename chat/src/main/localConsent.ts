@@ -9,7 +9,9 @@ import type { LocalCard } from "../shared/ipc";
  *
  *   Order  secret or protected location (filePolicy.decide, always first) -> stored Never -> stored Always (only where the
  *          call still allows Always) -> the existing policy -> the card.
- *   Keys   write:<real folder of the target>   shell:<exact command, trimmed>   web:<host>   websearch
+ *   Keys   write:<real folder of the target>   shell:<exact command, trimmed>   web:<host>   websearch   flow:add
+ *          (flow:add = the Companion MCP tool flow_plan_add with mode "save": TBD's agent adds lines to the person's plan on
+ *          this Mac. Preview and flow_plan_today write nothing and are free.)
  *   Store  local-consent.json in the helper state folder: Mac-wide (not keyed by workspace), 0600, atomic, corrupt copies kept.
  *
  * Kept free of relative value imports (type imports only) so node tests can load it directly under type stripping; the
@@ -293,11 +295,11 @@ export function shellAlways(command: string): ShellVerdict {
 
 // ---------------------------------------------------------------- keys and targets
 
-export type LocalKind = "shell" | "write" | "web" | "websearch";
+export type LocalKind = "shell" | "write" | "web" | "websearch" | "plan";
 
 export interface LocalTarget {
   kind: LocalKind;
-  /** The rule key: `write:<folder>`, `shell:<command>`, `web:<host>`, `websearch`. */
+  /** The rule key: `write:<folder>`, `shell:<command>`, `web:<host>`, `websearch`, `flow:add`. */
   key: string;
   /** Whether the card offers "Always allow" (the call still allows it now, whatever an older rule says). */
   alwaysOk: boolean;
@@ -309,6 +311,11 @@ export interface LocalTarget {
   folder?: string;
   host?: string;
   verb?: "Write" | "Edit";
+  /** web: false when the address is on this Mac itself (the request does not leave it). Default: it leaves. */
+  leavesMac?: boolean;
+  /** plan: the day the lines are for (`yyyy-MM-dd`) and how many lines the plan has. */
+  day?: string;
+  lines?: number;
   /** write: the path the agent named when it differs from the real one (a link, `~`, a relative path). */
   via?: string;
 }
@@ -322,11 +329,117 @@ export function isLocalConsentTool(tool: string): boolean {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
+// ---------------------------------------------------------------- the plan tool (flow_plan_add)
+
+/** The rule key of "add lines to the plan on this Mac". */
+export const FLOW_ADD_KEY = "flow:add";
+/** The Companion MCP tool, under both harnesses' names (the Agent SDK and LangChain name MCP tools `mcp__<server>__<tool>`). */
+export const FLOW_ADD_TOOLS: readonly string[] = ["mcp__companion__flow_plan_add", "companion__flow_plan_add"];
+/** The card shows this many lines of the plan; the rest is counted. */
+export const FLOW_CARD_LINES = 12;
+
+export function isFlowPlanAdd(tool: string): boolean {
+  return FLOW_ADD_TOOLS.includes(tool);
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+/** Today as `yyyy-MM-dd` on this Mac's clock (the CLI's default day too). */
+export function localToday(now: Date = new Date()): string {
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+}
+
+function validDay(day: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  return y >= 1 && date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
+}
+
+function planTarget(input: Record<string, unknown>, today: () => string): LocalTarget | { refuse: string } {
+  const text = str(input.text);
+  if (!text.trim()) return { refuse: "TBD could not see which lines to add to your plan, so it did not add anything." };
+  let day = today();
+  if (input.day !== undefined && input.day !== null) {
+    if (typeof input.day !== "string" || !validDay(input.day)) return { refuse: "TBD could not read the day of this plan, so it did not add anything." };
+    day = input.day;
+  }
+  const all = text.split(/\r\n|\n|\r/).filter((line) => line.trim() !== "");
+  const shown = all.slice(0, FLOW_CARD_LINES).join("\n");
+  return { kind: "plan", key: FLOW_ADD_KEY, alwaysOk: true, text: shown, day, lines: all.length };
+}
+
+// ---------------------------------------------------------------- web: which addresses never get Always
+
+const R_WEB_MAC = "This address is on this Mac.";
+const R_WEB_LAN = "This address is on your own network.";
+const R_WEB_IP = "This address is a number, so TBD cannot tell what is behind it.";
+const R_WEB_USER = "This address has a user name or password in it.";
+const R_WEB_PORT = "This address uses a special port.";
+
+type WebVerdict = { always: true } | { always: false; reason: string; onThisMac: boolean };
+
+function ipv4Parts(host: string): number[] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  return parts.every((n) => n <= 255) ? parts : null;
+}
+
+/** 127/8 on this Mac; 10/8, 172.16/12, 192.168/16, 169.254/16 (and the carrier-grade 100.64/10, and 0/8) on the network. */
+function ipv4Kind(p: number[]): "mac" | "lan" | "public" {
+  const [a, b] = p;
+  if (a === 127) return "mac";
+  if (a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)) return "lan";
+  return "public";
+}
+
+/** `[...]` as the URL parser writes an IPv6 host (compressed, lower case). ::1 on this Mac; fc00::/7 and fe80::/10 on the network; ::ffff:a.b.c.d by its IPv4 part. */
+function ipv6Kind(bracketed: string): "mac" | "lan" | "public" {
+  const h = bracketed.slice(1, -1);
+  if (h === "::1" || h === "::") return "mac";
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16), lo = parseInt(mapped[2], 16);
+    return ipv4Kind([hi >> 8, hi & 255, lo >> 8, lo & 255]);
+  }
+  const first = parseInt(h.split(":")[0] || "0", 16);
+  if (first >= 0xfc00 && first <= 0xfdff) return "lan"; // fc00::/7
+  if (first >= 0xfe80 && first <= 0xfebf) return "lan"; // fe80::/10
+  return "public";
+}
+
+/**
+ * No "Always allow" (ask every time) for a web address that is on this Mac or the person's own network, is a bare IP number, has a
+ * user name or password in it, or uses a port other than the default. An "Always" for a host name would otherwise carry over to
+ * a request that reaches something else: a local service, a router, an admin page, or one that sees a login.
+ */
+export function webAlwaysVerdict(url: URL): WebVerdict {
+  const host = url.hostname.toLowerCase().replace(/\.+$/, "");
+  const mac = (reason: string): WebVerdict => ({ always: false, reason, onThisMac: true });
+  const lan = (reason: string): WebVerdict => ({ always: false, reason, onThisMac: false });
+  if (host === "localhost" || host.endsWith(".localhost")) return mac(R_WEB_MAC);
+  if (host.startsWith("[")) {
+    const kind = ipv6Kind(host);
+    return kind === "mac" ? mac(R_WEB_MAC) : lan(kind === "lan" ? R_WEB_LAN : R_WEB_IP);
+  }
+  const v4 = ipv4Parts(host);
+  if (v4) {
+    const kind = ipv4Kind(v4);
+    return kind === "mac" ? mac(R_WEB_MAC) : lan(kind === "lan" ? R_WEB_LAN : R_WEB_IP);
+  }
+  if (host.endsWith(".local") || !host.includes(".")) return lan(R_WEB_LAN); // Bonjour names and one-word names (a router, a NAS)
+  if (url.username !== "" || url.password !== "") return lan(R_WEB_USER);
+  if (url.port !== "") return lan(R_WEB_PORT);
+  return { always: true };
+}
+
 /**
  * What a local call is, from the call itself. `null`: not a tool of the rules (the caller's own policy stays). `{ refuse }`: a
  * call TBD cannot name (no command, no file, no address) is refused, because no rule can describe it.
  */
-export function localTarget(tool: string, input: Record<string, unknown>, writeScope: (tool: string, input: Record<string, unknown>) => WriteScope | null): LocalTarget | { refuse: string } | null {
+export function localTarget(tool: string, input: Record<string, unknown>, writeScope: (tool: string, input: Record<string, unknown>) => WriteScope | null, today: () => string = localToday): LocalTarget | { refuse: string } | null {
+  if (isFlowPlanAdd(tool)) return planTarget(input, today);
   if (!isLocalConsentTool(tool)) return null;
   if (tool === "Bash") {
     const command = str(input.command).trim();
@@ -342,7 +455,12 @@ export function localTarget(tool: string, input: Record<string, unknown>, writeS
     let url: URL | null = null;
     try { url = new URL(raw); } catch { url = null; }
     if (!url || (url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) return { refuse: "TBD could not read that web address, so it did not fetch it." };
-    return { kind: "web", key: `web:${url.hostname.toLowerCase()}`, alwaysOk: true, text: raw, host: url.hostname.toLowerCase() };
+    // Userinfo and a special port: `url.hostname` is only the host, so the key is the host; Always is not offered for them (above).
+    const verdict = webAlwaysVerdict(url);
+    return {
+      kind: "web", key: `web:${url.hostname.toLowerCase()}`, alwaysOk: verdict.always, text: raw, host: url.hostname.toLowerCase(),
+      ...(verdict.always ? {} : { why: verdict.reason, leavesMac: !verdict.onThisMac }),
+    };
   }
   const scope = writeScope(tool, input);
   if (!scope) return { refuse: "TBD could not see which file this changes, so it did not change anything." };
@@ -360,7 +478,7 @@ export function normaliseKey(key: string): string {
   return key;
 }
 
-const VALID_KEY = /^(shell:[\s\S]+|write:\/[\s\S]+|web:[^\s]+|websearch)$/;
+const VALID_KEY = /^(shell:[\s\S]+|write:\/[\s\S]+|web:[^\s]+|websearch|flow:add)$/;
 
 // ---------------------------------------------------------------- the card
 
@@ -410,9 +528,24 @@ export function buildLocalCard(target: LocalTarget): LocalCard {
   }
   if (target.kind === "web") {
     const host = cleanLocalText(target.host ?? "");
+    const leaves = target.leavesMac !== false;
+    const leaveLine = "This sends a request over the internet. It leaves this Mac.";
     return {
-      title: `Allow TBD's agent to fetch from ${host}?`, label: "Address", text, ...(cut ? { cut } : {}), leavesMac: true,
-      note: "This sends a request over the internet. It leaves this Mac.", scope: `Always allow covers fetching from ${host} only.`, ...base,
+      title: `Allow TBD's agent to fetch from ${host}?`, label: "Address", text, ...(cut ? { cut } : {}), leavesMac: leaves,
+      // No Always: say why (this address is on this Mac or your network, has a login in it, ...); the every-time line is the hint.
+      note: offered ? leaveLine : `${target.why ?? ""}${leaves ? ` ${leaveLine}` : ""}`.trim(),
+      ...(offered ? { scope: `Always allow covers fetching from ${host} only.` } : {}), ...base,
+    };
+  }
+  if (target.kind === "plan") {
+    const total = target.lines ?? 0;
+    const shownLines = text === "" ? 0 : text.split("\n").length;
+    return {
+      title: `Allow TBD's agent to add lines to your plan for ${target.day ?? ""}?`, label: "Plan", text,
+      dayLine: `Day: ${target.day ?? ""}`,
+      ...(total > shownLines ? { cut: `Only the first ${shownLines} of ${total} lines are shown.` } : cut ? { cut } : {}), leavesMac: false,
+      note: "The lines are saved on this Mac only. They are not sent to Task Board.",
+      ...(offered ? { scope: "Always allow covers adding lines to your plan on this Mac." } : {}), ...base,
     };
   }
   return {
@@ -549,6 +682,8 @@ export interface LocalPermissionDeps {
   policy(tool: string, input: Record<string, unknown>): PolicyVerdict;
   /** filePolicy.writeScope: the real folder of a write target and whether it may get "Always allow". */
   writeScope(tool: string, input: Record<string, unknown>): WriteScope | null;
+  /** Today as `yyyy-MM-dd` (the default day of a plan); tests set it. Default: this Mac's date. */
+  today?(): string;
   /** Show the card. `remember` with `allow` = Always allow; `remember` without `allow` = Never allow. */
   askPerson(card: LocalCard, target: LocalTarget): Promise<{ allow: boolean; remember: boolean }>;
   /**
@@ -567,12 +702,13 @@ export interface LocalPermissionResult {
 }
 
 export const localNeverMessage = (target: LocalTarget): string => {
-  const what = target.kind === "shell" ? "running this command" : target.kind === "write" ? "writing in this folder" : target.kind === "web" ? `fetching from ${target.host}` : "web searches";
+  const what = target.kind === "shell" ? "running this command" : target.kind === "write" ? "writing in this folder" : target.kind === "web" ? `fetching from ${target.host}` : target.kind === "plan" ? "adding lines to the plan" : "web searches";
   return `The person told TBD never to allow ${what}.`;
 };
 
 /**
- * Decide one local call (the Agent SDK's Bash, Write, Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch). `null` for any other
+ * Decide one local call (the Agent SDK's Bash, Write, Edit, MultiEdit, NotebookEdit, WebFetch, WebSearch, and the Companion plan
+ * tool `flow_plan_add` in both harnesses). `null` for any other
  * tool: the caller's own policy (reads in granted folders, the folder grant) decides it.
  *
  * Order: a secret or protected location denies first, whatever a rule says. Then a stored `never` denies. Then a stored
@@ -581,9 +717,13 @@ export const localNeverMessage = (target: LocalTarget): string => {
  * a card that did not offer it counts once.
  */
 export async function decideLocalCall(req: { tool: string; input: Record<string, unknown> }, deps: LocalPermissionDeps): Promise<LocalPermissionResult | null> {
-  const target = localTarget(req.tool, req.input, deps.writeScope);
+  // The plan tool: only mode "save" writes. "preview" is free (nothing is written, nothing leaves this Mac), so no card and no rule.
+  const flow = isFlowPlanAdd(req.tool);
+  if (flow && req.input.mode === "preview") return { allow: true };
+  const target = localTarget(req.tool, req.input, deps.writeScope, deps.today);
   if (target === null) return null;
-  const verdict = deps.policy(req.tool, req.input);
+  // The plan tool names no file or command: no protected location can be in it.
+  const verdict: PolicyVerdict = flow ? { kind: "ask", folder: null } : deps.policy(req.tool, req.input);
   if (verdict.kind === "deny") return { allow: false, message: verdict.reason };
   if ("refuse" in target) return deps.checkOnly ? { allow: true } : { allow: false, message: target.refuse };
   const rule = deps.store.decision(target.key);

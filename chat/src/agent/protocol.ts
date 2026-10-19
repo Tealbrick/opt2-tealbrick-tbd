@@ -139,6 +139,15 @@ export type AgentToHelper =
 export const AGENT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "WebFetch", "WebSearch", ASK_TOOL];
 
 /**
+ * The Companion MCP tool that adds lines to the person's plan, under both harnesses' names. Equals FLOW_ADD_TOOLS in
+ * main/localConsent.ts (that file has no relative imports, so the list is repeated here; test/local-flow-plan.test.ts checks both).
+ */
+export const FLOW_PLAN_ADD_TOOLS: readonly string[] = ["mcp__companion__flow_plan_add", "companion__flow_plan_add"];
+
+/** The system-prompt line about planning the person's day: the same in both harnesses. */
+export const PLAN_LINE = "To plan the person's day, use flow_plan_today and flow_plan_add (preview first, then save). TBD keeps the plan on this Mac.";
+
+/**
  * Whether TBD's helper must decide a tool call (SEC-04). Harness-local tools, the bridge
  * (which decides its own calls) and AskUserQuestion (answered on a question card) pass; every built-in file, shell and web tool goes to the
  * helper's file policy: free inside the agent workspace and granted folders, secrets refused,
@@ -146,7 +155,10 @@ export const AGENT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "We
  * Connect calls are the exception inside `mcp__tealbrick__`: their consent (reads free, everything else on the card, the
  * person's Always/Never rules) is main/connectConsent.ts, applied by both harnesses before this check.
  */
-export function needsPermission(tool: string): boolean {
+export function needsPermission(tool: string, input?: Record<string, unknown>): boolean {
+  // The Companion plan tool: only `mode: "preview"` (exactly) is free. A save, any other mode and a call without arguments ask
+  // (main/localConsent.ts decides: the person's Always/Never for `flow:add`, else the card). The CLI refuses every other mode.
+  if (FLOW_PLAN_ADD_TOOLS.includes(tool)) return input?.mode !== "preview";
   return !(tool === ASK_TOOL || tool.startsWith("mcp__companion__") || tool.startsWith("mcp__listening__") || tool.startsWith("mcp__tealbrick__"));
 }
 
@@ -159,6 +171,8 @@ export function describeToolCall(tool: string, input: Record<string, unknown>): 
     case "Edit": return `Edit file ${s(input.file_path)}`;
     case "WebFetch": return `Fetch ${s(input.url)}`;
     case "WebSearch": return `Search the web: ${s(input.query)}`;
+    case "mcp__companion__flow_plan_add":
+    case "companion__flow_plan_add": return `Add lines to your plan${typeof input.day === "string" ? ` for ${input.day}` : ""}: ${s(input.text).slice(0, 200)}`;
     default: return `${tool} ${s(input).slice(0, 200)}`;
   }
 }
