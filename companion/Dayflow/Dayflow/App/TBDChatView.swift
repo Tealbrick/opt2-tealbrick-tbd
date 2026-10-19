@@ -68,6 +68,17 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     } catch { status = error.localizedDescription }
   }
 
+  /// How long the app waits for one account call. "Mark done on Task Board" gets the helper's worst case (relay open and
+  /// initialize 30 s each, list, call, hold wait 600 s, second call, one read: about 780 s) plus a margin.
+  nonisolated static func accountCallTimeoutSeconds(_ channel: String) -> Int {
+    switch channel {
+    case "flowTaskBoardComplete": return 800
+    case "awaitSignIn", "awaitAgentConnect": return 660
+    case "agentSelfTest": return 120
+    default: return 45
+    }
+  }
+
   // Native settings use the same IPC handlers and credential store as Chat.
   func accountCall(_ channel: String, args: [Any] = []) async throws -> Any {
     let allowed: Set<String> = ["session", "entitlements", "controlPlanes", "portalWorkspaces", "selectPortalWorkspace", "signIn", "awaitSignIn", "cancelSignIn", "signOut", "activateControlPlane", "addControlPlane", "removeControlPlane",
@@ -75,6 +86,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       "listAgents", "checkUpdate",
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
       "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect",
+      // Flow's Task Board source (F4): the owner's open issues, and "done" after the person's tap (TBD's agent, never the person's token).
+      "flowTaskBoardList", "flowTaskBoardComplete",
       // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
       "restartAgent",
       // WP-HARNESS L3: the setup's 4 checks of TBD's agent with the chosen harness.
@@ -82,7 +95,7 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     guard allowed.contains(channel) else { throw failure("Unsupported account operation") }
     start()
     guard ready || process?.isRunning == true else { throw failure(status) }
-    return try await hostCall(channel, args: args, timeout: .seconds(["awaitSignIn", "awaitAgentConnect"].contains(channel) ? 660 : channel == "agentSelfTest" ? 120 : 45),
+    return try await hostCall(channel, args: args, timeout: .seconds(Self.accountCallTimeoutSeconds(channel)),
                               timeoutMessage: "Portal operation timed out. Refresh to check current state.")
   }
 
@@ -100,6 +113,19 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
                                    timeoutMessage: "Knowledge did not answer in time. Try again.")
     guard let result = TBDKnowledgeSaveResult(payload: value) else { throw failure("Knowledge did not return a document id. Try again.") }
     return result
+  }
+
+  /// Progress handlers of running "Mark done on Task Board" requests, by issue id.
+  private var flowTaskBoardStatus: [String: @MainActor (String) -> Void] = [:]
+
+  /// Flow (F4): marks one Task Board issue done after the person's tap. The helper calls Task Board as TBD's own
+  /// agent. A hold ("Waiting for owner approval") comes back through `onStatus`. Returns the issue's new status.
+  func flowTaskBoardComplete(issue: String, result: String, onStatus: @escaping @MainActor (String) -> Void) async throws -> String {
+    flowTaskBoardStatus[issue] = onStatus
+    defer { flowTaskBoardStatus[issue] = nil }
+    let value = try await accountCall("flowTaskBoardComplete", args: [["issue": issue, "result": result]])
+    guard let status = (value as? [String: Any])?["status"] as? String else { throw failure("Task Board did not confirm the new status. Check the issue on Task Board.") }
+    return status
   }
 
   /// One native-originated helper request (negative ids, `hostRequests`), with a time limit.
@@ -251,6 +277,12 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       if message["channel"] as? String == "tbd:knowledgeSaveStatus" {
         let payload = message["payload"] as? [String: Any]
         if let id = payload?["transcriptId"] as? String, let text = payload?["message"] as? String { knowledgeStatus[id]?(text) }
+        return
+      }
+      // "Mark done on Task Board" progress goes to Flow, not to the web page.
+      if message["channel"] as? String == "tbd:flowTaskBoardStatus" {
+        let payload = message["payload"] as? [String: Any]
+        if let id = payload?["issue"] as? String, let text = payload?["message"] as? String { flowTaskBoardStatus[id]?(text) }
         return
       }
       if resetRequest == nil { deliver(message) }

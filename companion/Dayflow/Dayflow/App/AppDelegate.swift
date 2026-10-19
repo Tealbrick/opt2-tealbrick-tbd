@@ -147,6 +147,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Start daily recap generation scheduler (checks every 5 minutes)
     DailyRecapScheduler.shared.start()
 
+    // Flow: the creature overlay follows the session mirror, and the planner ticks the local list once a second.
+    // Not in the XCTest host: tests build their own planner on a temp folder.
+    if !TBDOnboardingController.isTestHost {
+      FlowOverlayController.shared.start()
+      // The observer is off until the person turns it on (Flow › Observer). Plug it in before the planner starts a session.
+      FlowSessionMirror.shared.setObserver(FlowDistractionAgent.shared)
+      FlowPlanner.shared.start()
+      FlowTaskBoardSource.shared.start()
+      FlowCardLabeller.shared.start()
+    }
+
 
     powerObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.willPowerOffNotification,
@@ -204,6 +215,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    // Flow: stop the observer so no screenshot folder is left in the temp folder.
+    if !TBDOnboardingController.isTestHost { FlowDistractionAgent.shared.stop() }
     TBDChatRuntime.shared.stop()
     TBDListeningRuntime.shared.terminate()
     recorder?.finishForTermination()

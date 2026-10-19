@@ -1,0 +1,136 @@
+//
+//  FlowView.swift
+//  TBD
+//
+//  The Flow page: today's plan on this Mac, the observer and the nudge preview. Layout follows the approved mockup
+//  (coordination/leads/tbd/flow-mockups-20261019, "today-local"). The Observer tab is `FlowObserverView` (slice F3), the
+//  Task Board source is F4, and plan vs actual from Companion's timeline (the strip and its tab) is F5.
+//
+
+import SwiftUI
+import TBDDesign
+import TBDModels
+
+enum FlowTab: String, CaseIterable {
+  case today, planVsActual, observer, nudge
+
+  var title: String {
+    switch self {
+    case .today: return "Today"
+    case .planVsActual: return "Plan vs actual"
+    case .observer: return "Observer"
+    case .nudge: return "Nudge preview"
+    }
+  }
+}
+
+struct FlowView: View {
+  @ObservedObject var planner: FlowPlanner
+  @ObservedObject private var mirror = FlowSessionMirror.shared
+  @ObservedObject private var observer: FlowDistractionAgent
+  @StateObject private var observerModel: FlowObserverModel
+  @StateObject private var dayModel: FlowDayModel
+  @State private var tab: FlowTab
+  private let showsTasklistImport: Bool
+
+  init(
+    planner: FlowPlanner = .shared, tab: FlowTab = .today, showsTasklistImport: Bool = TBDTasklistImport.isAvailable,
+    observer: FlowDistractionAgent = .shared, observerModel: FlowObserverModel? = nil, dayModel: FlowDayModel? = nil
+  ) {
+    self.planner = planner
+    self.observer = observer
+    _observerModel = StateObject(wrappedValue: observerModel ?? FlowObserverModel())
+    _dayModel = StateObject(wrappedValue: dayModel ?? FlowDayModel(planner: planner))
+    _tab = State(initialValue: tab)
+    self.showsTasklistImport = showsTasklistImport
+  }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: TBDKit.s5) {
+        header
+        TBDSegmented(selection: $tab, options: FlowTab.allCases.map { ($0, $0.title) })
+        switch tab {
+        case .today:
+          FlowTodayView(planner: planner, dayModel: dayModel, showsTasklistImport: showsTasklistImport)
+        case .planVsActual:
+          FlowPlanVsActualView(model: dayModel)
+        case .observer:
+          FlowObserverView(observer: observer, model: observerModel)
+        case .nudge:
+          FlowDemoView()
+        }
+      }
+      .padding(TBDKit.s8)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+    // F5: read Companion's timeline when the page opens, every minute while it is visible, and when the plan or a label changes.
+    .onAppear {
+      dayModel.start()
+      // F4: Task Board is asked when the page becomes visible and every 10 minutes while it is. Never in the background.
+      planner.taskBoard.pageDidAppear()
+    }
+    .onDisappear {
+      dayModel.stop()
+      planner.taskBoard.pageDidDisappear()
+    }
+  }
+
+  // MARK: Header
+
+  private var headerLabel: String {
+    switch tab {
+    case .today, .planVsActual: return "Companion · Today's plan · " + Self.dayLabel(planner.clock)
+    case .observer: return "Companion · Observer"
+    case .nudge: return "Companion · Nudge preview"
+    }
+  }
+
+  /// "Monday 19 October".
+  static func dayLabel(_ date: Date) -> String {
+    let f = DateFormatter()
+    f.locale = .current
+    f.setLocalizedDateFormatFromTemplate("EEEEdMMMM")
+    return f.string(from: date)
+  }
+
+  private var observerTagStatus: TBDStatus {
+    if observer.status.hasPrefix("Last check") { return .live }
+    return observer.lastError != nil ? .needsYou : .idle
+  }
+
+  /// The words in the observer tag. A long error sentence is not a tag: the tag says "needs attention" and the sentence
+  /// shows in a notice under the header.
+  static func observerTagText(status: String, lastError: String?) -> String {
+    guard let lastError, !lastError.isEmpty, status.contains(lastError) else { return status }
+    return "Observer: needs attention"
+  }
+
+  private var header: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s3) {
+      headerRow
+      if let error = observer.lastError, !error.isEmpty {
+        TBDNotice(error, tone: .needsYou)
+      }
+    }
+  }
+
+  private var headerRow: some View {
+    HStack(alignment: .firstTextBaseline, spacing: TBDKit.s4) {
+      VStack(alignment: .leading, spacing: TBDKit.s1) {
+        Text("Flow").font(TBDTokens.Typography.display).tracking(TBDTokens.Typography.displayTracking)
+          .foregroundStyle(TBDColor.ink)
+        Text(headerLabel).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+      }
+      Spacer(minLength: 0)
+      HStack(spacing: TBDKit.s2) {
+        if planner.taskBoard.isTaskBoard {
+          TBDTag("From Task Board", status: .live)
+        } else {
+          TBDTag("Only on this Mac", status: .idle)
+        }
+        TBDTag(Self.observerTagText(status: observer.status, lastError: observer.lastError), status: observerTagStatus)
+      }
+    }
+  }
+}

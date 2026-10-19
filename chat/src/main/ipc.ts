@@ -9,6 +9,7 @@ import { answerAsk } from "./asks";
 import { addAgentFolder, agentFolders, agentRelay, agentWorkspace, ensurePerson, getServices, removeAgentFolder, resetServices, saveAttachment } from "./services";
 import { connectMcp } from "@opt2-tealbrick/bridge";
 import { knowledgeSave, type KnowledgeSaveInput } from "./knowledgeSave";
+import { flowTaskBoardComplete, flowTaskBoardList } from "./flowTaskBoard";
 import { dialog } from "../tbd/host";
 import { publicPersonSession } from "./portal";
 import { DEFAULT_AGENT_ID } from "./defaultAgent";
@@ -73,6 +74,13 @@ function knowledgeInput(raw: unknown): KnowledgeSaveInput {
   const text = (k: string) => { if (typeof r[k] !== "string") throw new Error(`Save to Knowledge: ${k} is missing.`); return r[k] as string; };
   const tags = Array.isArray(r.tags) ? r.tags.filter((t): t is string => typeof t === "string") : [];
   return { transcriptId: text("transcriptId"), title: text("title"), body: text("body"), summary: text("summary"), tags };
+}
+
+/** Native's Flow request, checked field by field (strings only). */
+function flowCompleteInput(raw: unknown): { issue: string; result: string } {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  if (typeof r.issue !== "string" || typeof r.result !== "string") throw new Error("Flow: the issue or the result is missing.");
+  return { issue: r.issue, result: r.result };
 }
 
 export function registerIpc(): void {
@@ -202,6 +210,25 @@ export function registerIpc(): void {
       connection: () => getServices().agentIdentity.connection(),
       openRelay: async (c) => connectMcp(await agentRelay(c)),
       onStatus: (message) => e.sender.send("tbd:knowledgeSaveStatus", { transcriptId: input.transcriptId, message }),
+    });
+  }));
+
+  // Flow's Task Board source (F4, C282): the same agent identity and relay as Save to Knowledge. The list is a read;
+  // the issue is marked done only when native sends the person's tap. Flow never creates issues (Q1).
+  const taskBoardDeps = () => ({
+    connection: () => getServices().agentIdentity.connection(),
+    openRelay: async (c: Parameters<typeof agentRelay>[0]) => connectMcp(await agentRelay(c)),
+  });
+  ipcMain.handle("studio:flowTaskBoardList", withPerson(async () => {
+    if (!signedIn()) throw new Error("Sign in to Teal Brick in TBD first.");
+    return flowTaskBoardList(taskBoardDeps());
+  }));
+  ipcMain.handle("studio:flowTaskBoardComplete", withPerson(async (e: { sender: WebContents }, raw: unknown) => {
+    if (!signedIn()) throw new Error("Sign in to Teal Brick in TBD first.");
+    const input = flowCompleteInput(raw);
+    return flowTaskBoardComplete(input, {
+      ...taskBoardDeps(),
+      onStatus: (message) => e.sender.send("tbd:flowTaskBoardStatus", { issue: input.issue.trim(), message }),
     });
   }));
 

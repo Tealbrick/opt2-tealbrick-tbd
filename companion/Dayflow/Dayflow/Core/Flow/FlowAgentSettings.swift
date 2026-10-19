@@ -1,0 +1,138 @@
+//
+//  FlowAgentSettings.swift
+//  TBD
+//
+//  The Flow companion knobs that are still being tuned, in one UserDefaults-backed object the debug panel edits live:
+//  how often the observer looks, what it is told, and how the overlay behaves. Port of v1 without the model and
+//  reasoning settings: the observer's model, mode and switch live in `TBDFlowObserverSetup` (Flow › Observer).
+//
+
+import Combine
+import Foundation
+
+@MainActor
+final class FlowAgentSettings: ObservableObject {
+  static let shared = FlowAgentSettings()
+
+  static let screenshotHeights = [480, 720, 1080]
+  static let alertStyleKey = "flowAlertStyle"
+
+  /// The saved alert style (friendly until the person chooses).
+  static func savedAlertStyle(_ defaults: UserDefaults) -> FlowAlertStyle {
+    defaults.string(forKey: alertStyleKey).flatMap(FlowAlertStyle.init(rawValue:)) ?? .friendly
+  }
+
+  // MARK: Agent
+
+  /// Quiet, Friendly or Feisty: how often the observer nudges. The planner puts it into the session.
+  @Published var alertStyle: FlowAlertStyle { didSet { set(alertStyle.rawValue, Self.alertStyleKey) } }
+  /// Seconds between checks.
+  @Published var tickSeconds: Double { didSet { set(tickSeconds, "flowAgentTickSeconds") } }
+  /// Screenshot height in pixels (width follows the display's aspect).
+  @Published var screenshotHeight: Int { didSet { set(screenshotHeight, "flowAgentShotHeight") } }
+  @Published var jpegQuality: Double { didSet { set(jpegQuality, "flowAgentJpegQuality") } }
+  /// Consecutive failed turns before the observer gives up for the session.
+  @Published var maxFailures: Int { didSet { set(maxFailures, "flowAgentMaxFailures") } }
+  /// Per-check timeout.
+  @Published var tickTimeoutSeconds: Double {
+    didSet { set(tickTimeoutSeconds, "flowAgentTickTimeout") }
+  }
+  /// The briefing template; empty means the built-in one.
+  @Published var briefingTemplate: String { didSet { set(briefingTemplate, "flowAgentBriefing") } }
+  /// Appended to whichever briefing is used, for quick experiments.
+  @Published var extraInstructions: String { didSet { set(extraInstructions, "flowAgentExtra") } }
+  /// How often a check also asks the model to revise the session timeline.
+  @Published var timelineEverySeconds: Double {
+    didSet { set(timelineEverySeconds, "flowAgentTimelineSeconds") }
+  }
+
+  // MARK: Overlay
+
+  /// How long the break tub stays before the creature climbs out.
+  @Published var breakOverlaySeconds: Double {
+    didSet { set(breakOverlaySeconds, "flowBreakOverlaySeconds") }
+  }
+  @Published var toastSeconds: Double { didSet { set(toastSeconds, "flowToastSeconds") } }
+  @Published var praiseSeconds: Double { didSet { set(praiseSeconds, "flowPraiseSeconds") } }
+  /// Where the creature comes in, as a drag offset from the default corner: the side layout moves up/down, the
+  /// from-above layouts move left/right. Set by dragging the creature on the desktop.
+  @Published var sideOffsetY: Double { didSet { set(sideOffsetY, "flowOverlaySideOffsetY") } }
+  @Published var topOffsetX: Double { didSet { set(topOffsetX, "flowOverlayTopOffsetX") } }
+  @Published var peekOffsetX: Double { didSet { set(peekOffsetX, "flowOverlayPeekOffsetX") } }
+  @Published var nudgeVariant: FlowNudgeVariant {
+    didSet { defaults.set(nudgeVariant.rawValue, forKey: FlowNudgeVariant.defaultsKey) }
+  }
+
+  private let defaults: UserDefaults
+
+  init(defaults d: UserDefaults = .standard) {
+    defaults = d
+    alertStyle = Self.savedAlertStyle(d)
+    let tick = d.double(forKey: "flowAgentTickSeconds")
+    tickSeconds = tick >= 5 ? tick : 15
+    let height = d.integer(forKey: "flowAgentShotHeight")
+    screenshotHeight = height >= 240 ? height : 1080
+    let quality = d.double(forKey: "flowAgentJpegQuality")
+    jpegQuality = quality > 0 ? quality : 0.6
+    let failures = d.integer(forKey: "flowAgentMaxFailures")
+    maxFailures = failures > 0 ? failures : 3
+    let timeout = d.double(forKey: "flowAgentTickTimeout")
+    tickTimeoutSeconds = timeout >= 10 ? timeout : 60
+    briefingTemplate = d.string(forKey: "flowAgentBriefing") ?? ""
+    extraInstructions = d.string(forKey: "flowAgentExtra") ?? ""
+    let timelineSeconds = d.double(forKey: "flowAgentTimelineSeconds")
+    timelineEverySeconds = timelineSeconds >= 15 ? timelineSeconds : 60
+    let breakSeconds = d.double(forKey: "flowBreakOverlaySeconds")
+    breakOverlaySeconds = breakSeconds > 0 ? breakSeconds : 8
+    let toast = d.double(forKey: "flowToastSeconds")
+    toastSeconds = toast > 0 ? toast : 4
+    let praise = d.double(forKey: "flowPraiseSeconds")
+    praiseSeconds = praise > 0 ? praise : 5
+    sideOffsetY = d.double(forKey: "flowOverlaySideOffsetY")
+    topOffsetX = d.double(forKey: "flowOverlayTopOffsetX")
+    peekOffsetX = d.double(forKey: "flowOverlayPeekOffsetX")
+    nudgeVariant = d.string(forKey: FlowNudgeVariant.defaultsKey).flatMap(FlowNudgeVariant.init(rawValue:)) ?? .side
+  }
+
+  /// Drag offset for a layout (x for the from-above layouts, y for side).
+  func positionOffset(for variant: FlowNudgeVariant) -> Double {
+    switch variant {
+    case .side: return sideOffsetY
+    case .top: return topOffsetX
+    case .peek: return peekOffsetX
+    }
+  }
+
+  func setPositionOffset(_ value: Double, for variant: FlowNudgeVariant) {
+    switch variant {
+    case .side: sideOffsetY = value
+    case .top: topOffsetX = value
+    case .peek: peekOffsetX = value
+    }
+  }
+
+  func resetPositions() {
+    sideOffsetY = 0
+    topOffsetX = 0
+    peekOffsetX = 0
+  }
+
+  private func set(_ value: Any, _ key: String) {
+    defaults.set(value, forKey: key)
+  }
+
+  /// Back to the built-in values (keeps the nudge variant and the alert style).
+  func resetToDefaults() {
+    tickSeconds = 15
+    screenshotHeight = 1080
+    jpegQuality = 0.6
+    maxFailures = 3
+    tickTimeoutSeconds = 60
+    briefingTemplate = ""
+    extraInstructions = ""
+    timelineEverySeconds = 60
+    breakOverlaySeconds = 8
+    toastSeconds = 4
+    praiseSeconds = 5
+  }
+}

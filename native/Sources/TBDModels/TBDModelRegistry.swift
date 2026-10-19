@@ -65,6 +65,8 @@ public enum TBDModelTask: String, CaseIterable, Sendable {
     case analysis
     /// Companion screen activity analysis (vision-capable model).
     case screen
+    /// Flow observer: checks if you work on your plan. Set in Flow › Observer, not in Settings › Models.
+    case flow
 }
 
 public final class TBDModelRegistry: @unchecked Sendable {

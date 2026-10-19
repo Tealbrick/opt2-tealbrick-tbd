@@ -63,6 +63,11 @@ struct TBDModelsView: View {
               route("Summaries", task: "analysis", detail: "Meeting and transcript analysis.")
               route("Transforms", task: "general", detail: "Text transformations and the default Listen AI route.")
               route("Screen analysis", task: "screen", detail: "Companion activity analysis. Choose a vision-capable model; screenshots may leave this Mac.")
+              VStack(alignment: .leading, spacing: 4) {
+                Text("Flow observer").font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink)
+                Text("Checks if you work on your plan. Set in Flow › Observer: a model on this Mac by default, a cloud model only if you choose it there.")
+                  .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+              }
             }
             if !error.isEmpty { TBDNotice(error, tone: .needsYou) }
           }.padding(.bottom, 24)
