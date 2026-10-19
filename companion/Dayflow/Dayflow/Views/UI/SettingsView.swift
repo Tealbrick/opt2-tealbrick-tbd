@@ -43,33 +43,7 @@ struct SettingsView: View {
       case .audioSystem: return "gearshape"
       }
     }
-
-    var title: String {
-      switch self {
-      case .about: return "About"
-      case .account: return "Account"
-      case .permissions: return "Access"
-      case .storage: return String(localized: "Storage")
-      case .privacy: return "Screen capture"
-      case .providers: return String(localized: "Providers")
-      case .aiTools: return String(localized: "Tools")
-      case .data: return String(localized: "Export")
-      case .other: return "General"
-      case .capture: return "Capture"
-      case .engine: return "Agent model"
-      case .audioAI: return "Speech"
-      case .audioSystem: return "System"
-      }
-    }
   }
-
-  /// Settings grouped by TBD's three aspects plus the app (TBD-PRODUCT.md §a, C142).
-  private static let groups: [(title: String, tabs: [SettingsTab])] = [
-    ("Chat", [.engine]),
-    ("Companion", [.privacy, .providers, .storage, .aiTools, .data]),
-    ("Listen", [.capture, .audioAI, .audioSystem]),
-    ("App", [.account, .permissions, .other, .about]),
-  ]
 
   @State private var selectedTab: SettingsTab
   init(initialSection: String = "account") {
@@ -196,57 +170,66 @@ struct SettingsView: View {
     .background(TBDColor.paper)
   }
 
-  @ViewBuilder
+  /// The side-nav item of the open pane (Models covers "engine", "providers" and "audioAI").
+  private var currentItem: TBDSettingsRoute.Item {
+    TBDSettingsRoute.item(for: selectedTab.rawValue) ?? .account
+  }
+
+  /// One column for every pane (TBD-UX-01): the pane header, then the pane, using the tile width up to
+  /// TBDMetrics.settingsContentMax and centred beyond it.
   private var settingsContent: some View {
-    if selectedTab == .engine || selectedTab == .providers || selectedTab == .audioAI {
-      // One Models screen; each entry opens the page it belongs to (agent, screen analysis, speech).
+    VStack(alignment: .leading, spacing: TBDKit.s5) {
+      SettingsPaneHeader(title: currentItem.title, subtitle: currentItem.subtitle)
+        .padding(.top, TBDKit.s6)
+      pane
+    }
+    .frame(maxWidth: TBDMetrics.settingsContentMax, maxHeight: .infinity, alignment: .topLeading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+  }
+
+  @ViewBuilder
+  private var pane: some View {
+    if let page = TBDSettingsRoute.modelsPage(for: selectedTab.rawValue) {
+      // One Models pane; each old entry point opens its own page (agent and task routes, speech, providers).
       TBDModelsView(
         screenSettings: { AnyView(SettingsProvidersTabView(viewModel: providersViewModel)) },
-        initialPage: selectedTab == .providers ? "Advanced" : selectedTab == .audioAI ? "Transcription" : "Tasks"
+        initialPage: page
       )
         .id(selectedTab)
-        .frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     } else if let section = listeningSection {
       TBDListeningRuntime.shared.settingsContent(section: section)
-        .frame(maxWidth: 660, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     } else if selectedTab == .privacy {
       VStack(alignment: .leading, spacing: 24) {
         tabContent
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .padding(.top, 24)
-      .padding(.trailing, 16)
       .padding(.bottom, 24)
-      .frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     } else {
       ScrollView(.vertical, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 24) {
           tabContent
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 24)
-        .padding(.trailing, 16)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, minHeight: 0, alignment: .topLeading)
       }
-      .frame(maxWidth: 600, maxHeight: .infinity, alignment: .topLeading)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
   }
 
+  /// One plain list, one item per pane (TBD-UX-01; v1 had one Models item). Updates live in About.
   private var sidebar: some View {
     ScrollView(.vertical, showsIndicators: false) {
       VStack(alignment: .leading, spacing: TBDKit.s5) {
-        ForEach(Self.groups, id: \.title) { group in
+        ForEach(TBDSettingsRoute.groups, id: \.title) { group in
           TBDNavSection(group.title) {
-            ForEach(group.tabs) { tab in
-              TBDNavItem(tab.title, symbol: tab.symbol, current: selectedTab == tab) {
+            ForEach(group.items, id: \.self) { item in
+              let tab = SettingsTab(rawValue: item.section) ?? .account
+              TBDNavItem(item.title, symbol: tab.symbol, current: currentItem == item, ringed: false) {
                 withAnimation(TBDMotion.quick) { selectedTab = tab }
               }
               .pointingHandCursor()
-            }
-            if group.title == "App" {
-              TBDNavItem("Updates", symbol: "sparkles", current: false) { selectedTab = .about }
-                .help("Release notes")
             }
           }
         }

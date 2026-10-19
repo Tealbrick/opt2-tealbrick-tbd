@@ -105,10 +105,7 @@
 
       let main = CGSize(width: 1280, height: 800)
       let wide = CGSize(width: 1600, height: 1000)
-      let settingsTabs = [
-        "engine", "privacy", "providers", "storage", "aiTools", "data", "capture", "audioAI", "audioSystem",
-        "account", "permissions", "other", "about",
-      ]
+      let settingsTabs = TBDSettingsRoute.sections
       for dark in [false, true] {
         let theme = dark ? "dark" : "light"
         try render(MainView(), size: main, dark: dark, name: "timeline-\(theme)")

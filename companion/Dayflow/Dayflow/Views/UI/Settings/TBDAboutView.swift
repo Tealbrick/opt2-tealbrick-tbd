@@ -11,7 +11,7 @@ struct TBDAboutView: View {
           Text("Chat · Companion · Listen")
             .font(TBDTokens.Typography.body)
             .foregroundStyle(TBDColor.ink)
-          Text("Local build · updates are installed manually. No donor update feed is used.")
+          Text("TBD looks for a signed update once a day. You choose when to install it.")
             .font(TBDTokens.Typography.hint)
             .foregroundStyle(TBDColor.muted)
           TBDUpdatesSection()

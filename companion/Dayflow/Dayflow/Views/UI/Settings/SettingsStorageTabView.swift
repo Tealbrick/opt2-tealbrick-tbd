@@ -54,7 +54,7 @@ struct SettingsStorageTabView: View {
 
     return SettingsSection(
       title: String(localized: "Recording status"),
-      subtitle: String(localized: "Ensure Tealbrick can capture your screen."),
+      subtitle: String(localized: "Ensure TBD can capture your screen."),
       isFirst: true
     ) {
       VStack(alignment: .leading, spacing: 0) {

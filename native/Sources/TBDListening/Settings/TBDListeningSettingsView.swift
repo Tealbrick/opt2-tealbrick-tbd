@@ -52,7 +52,7 @@ struct TBDListeningSettingsView: View {
             }
             .font(TBDTokens.Typography.body)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, TBDTokens.Space.lg)
+            .padding(.bottom, TBDTokens.Space.lg)   // the host's pane header sits above (TBD-UX-01)
         }
     }
 }
@@ -406,18 +406,17 @@ struct TBDSystemSettings: View {
     let context: TBDListeningContext
     @EnvironmentObject private var env: TBDListeningEnvironment
     @State private var tick = 0
-    @State private var devices: [TBDAudioDevices.Input] = []
     @State private var usage: [(String, Int64)] = []
 
     var body: some View {
         let prefs = env.preferences
         VStack(alignment: .leading, spacing: 0) {
-            TBDSettingsRow("Microphone", help: "System Default follows the input chosen in macOS Sound settings.") {
-                TBDSelect(selection: tbdBinding({ prefs.microphoneUID ?? "" }, { uid in
-                    prefs.microphoneUID = uid.isEmpty ? nil : uid
-                    env.microphone.setPreferredDevice(uid: prefs.microphoneUID)
-                }, refresh: { tick += 1 }), options: [("", "System Default")] + devices.map { ($0.uid, $0.name) })
-                    .frame(width: 240)
+            // The microphone is chosen in one place: Capture (TBD-UX-01).
+            TBDSettingsRow("Microphone", help: "Choose the microphone in Capture.") {
+                Button("Open Capture") {
+                    NotificationCenter.default.post(name: Notification.Name("tbdListeningSettingsTabChanged"), object: "capture")
+                }
+                .buttonStyle(TBDButtonStyle(.secondary))
             }
             TBDSettingsRow("Save dictation history", help: "Voice notes are always saved.") {
                 Toggle("", isOn: tbdBinding({ prefs.keepHistory }, { prefs.keepHistory = $0 }, refresh: { tick += 1 })).labelsHidden().toggleStyle(TBDSwitchStyle()).fixedSize()
@@ -437,10 +436,7 @@ struct TBDSystemSettings: View {
             .padding(.top, TBDTokens.Space.md)
         }
         .id(tick)
-        .onAppear {
-            devices = TBDAudioDevices.inputs()
-            refreshUsage()
-        }
+        .onAppear { refreshUsage() }
     }
 
     private func refreshUsage() {

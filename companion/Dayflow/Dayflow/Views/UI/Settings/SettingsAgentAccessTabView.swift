@@ -29,7 +29,7 @@ struct SettingsAgentAccessTabView: View {
       subtitle:
         String(
           localized:
-            "Let Codex, Claude, Cursor, and other AI tools read your Tealbrick timeline. Copy the entry below and paste it into the MCP configuration of the tool you use. Tealbrick never changes another app's settings. Nothing leaves your Mac except what you send in your own conversations."
+            "Let Codex, Claude, Cursor, and other AI tools read your TBD timeline. Copy the entry below and paste it into the MCP configuration of the tool you use. TBD never changes another app's settings. Nothing leaves your Mac except what you send in your own conversations."
         ),
       isFirst: true
     ) {
@@ -63,7 +63,7 @@ struct SettingsAgentAccessTabView: View {
           label: viewModel.editsEnabled
             ? String(localized: "Edits are on") : String(localized: "Edits are off"),
           subtitle: viewModel.editsEnabled
-            ? String(localized: "AI tools can make changes through Tealbrick while it's running.")
+            ? String(localized: "AI tools can make changes through TBD while it's running.")
             : nil,
           showsDivider: false
         ) {
@@ -79,7 +79,7 @@ struct SettingsAgentAccessTabView: View {
       subtitle:
         String(
           localized:
-            "Adds a `dayflow` command so you can see your timeline from any terminal. This isn't a separate package like an npm install: it links to the CLI already inside Tealbrick, so the CLI always stays in sync with the app and can't break when the app updates. Nothing is downloaded and your shell configuration isn't touched."
+            "Adds a `dayflow` command so you can see your timeline from any terminal. This isn't a separate package like an npm install: it links to the CLI already inside TBD, so the CLI always stays in sync with the app and can't break when the app updates. Nothing is downloaded and your shell configuration isn't touched."
         )
     ) {
       VStack(alignment: .leading, spacing: 12) {
@@ -127,7 +127,7 @@ struct SettingsAgentAccessTabView: View {
       }
       return String(
         localized:
-          "\(CompanionTools.defaultTerminalLinkPath) is a file that Tealbrick didn't create. It is left unchanged."
+          "\(CompanionTools.defaultTerminalLinkPath) is a file that TBD didn't create. It is left unchanged."
       )
     }
   }
@@ -256,7 +256,7 @@ final class AgentAccessViewModel: ObservableObject {
       } catch CompanionTools.TerminalCommandError.occupiedByFile {
         terminalError = String(
           localized:
-            "A file that Tealbrick didn't create is already at \(CompanionTools.defaultTerminalLinkPath). It was left unchanged."
+            "A file that TBD didn't create is already at \(CompanionTools.defaultTerminalLinkPath). It was left unchanged."
         )
       } catch {
         terminalError = String(

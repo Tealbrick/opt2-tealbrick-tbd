@@ -14,7 +14,7 @@ struct SettingsRecordingPrivacyTabView: View {
   var body: some View {
     SettingsSection(
       title: String(localized: "Recording privacy"),
-      subtitle: String(localized: "Choose apps Tealbrick should hide from screenshots."),
+      subtitle: String(localized: "Choose apps TBD should hide from screenshots."),
       isFirst: true
     ) {
       VStack(alignment: .leading, spacing: 18) {
