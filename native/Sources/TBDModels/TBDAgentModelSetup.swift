@@ -32,12 +32,18 @@ public enum TBDAgentModelError: Error, LocalizedError, Equatable {
     case noModel, notAnthropic, noKey
     /// The cloud setting for TBD's agent misses a value (the sentence says which).
     case cloudIncomplete(String)
+    /// The LangChain agent runs on the person's own key or a local model; cloud providers stay with TBD's agent.
+    case cloudNotForLangChain
+    /// The LangChain agent's OpenAI setting misses a value (the sentence says which).
+    case openAIIncomplete(String)
     public var errorDescription: String? {
         switch self {
         case .noModel: return "No model set for TBD's agent. Set up a model in Settings → Models."
         case .notAnthropic: return "TBD's agent needs an Anthropic connection. Set up a model in Settings → Models."
         case .noKey: return "TBD's agent has no API key. Set up a model in Settings → Models."
         case .cloudIncomplete(let what): return "TBD's agent cloud setting is not complete. \(what)"
+        case .cloudNotForLangChain: return "The LangChain agent cannot use a cloud provider. Choose an API key or a model on this Mac, or use TBD's agent."
+        case .openAIIncomplete(let what): return "The LangChain agent's OpenAI setting is not complete. \(what)"
         }
     }
 }

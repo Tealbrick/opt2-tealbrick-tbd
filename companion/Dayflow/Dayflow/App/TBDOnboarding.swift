@@ -34,6 +34,25 @@ final class TBDOnboardingController: ObservableObject {
   @Published private(set) var pairCode = ""
   @Published private(set) var pairing = false
   @Published private(set) var pairError = ""
+  /// Step 2, harness (WP-HARNESS L3): TBD's agent (Claude Agent SDK) or the bundled LangChain agent. The panel shows
+  /// the choice; the setting changes only when the 4 checks pass (`useLangChain`).
+  let harnessStore = TBDAgentHarnessStore()
+  @Published private(set) var harnessKind: TBDAgentHarnessKind = .claudeAgentSDK
+  @Published var harnessShown: TBDAgentHarnessKind = .claudeAgentSDK
+  @Published var langchainProvider: TBDLangChainProvider = .anthropic
+  @Published var openAIModel = ""
+  @Published var openAIKey = ""
+  /// Whether an OpenAI key is in the Keychain (read when the panel shows and after a save; not on every render).
+  @Published private(set) var openAIKeyStored = false
+  func refreshOpenAIKey() { openAIKeyStored = harnessStore.hasOpenAIKey }
+  @Published private(set) var harnessBusy = false
+  @Published private(set) var harnessMessage: String?
+  /// The 4 checks of the last LangChain try: nil = not run, true/false = result.
+  @Published private(set) var langchainChecks: [(name: String, ok: Bool?, detail: String)] = TBDOnboardingController.emptyChecks
+  static let emptyChecks: [(name: String, ok: Bool?, detail: String)] = [
+    ("Installed", nil, ""), ("Model", nil, ""), ("Answers", nil, ""), ("TBD's tools", nil, ""),
+  ]
+
   /// Step 2, cloud (WP-HARNESS step 1, C287 (1)): the person's own Bedrock / Vertex AI / Foundry setting.
   let cloudStore = TBDAgentCloudStore()
   @Published var cloud = TBDAgentCloud(provider: .bedrock, model: TBDAgentCloudProvider.bedrock.exampleModel, region: "us-east-1") {
@@ -99,6 +118,10 @@ final class TBDOnboardingController: ObservableObject {
       agentModel = route.model
     }
     if let saved = cloudStore.load() { loadingCloud = true; cloud = saved; loadingCloud = false }
+    harnessKind = harnessStore.kind
+    harnessShown = harnessKind
+    langchainProvider = harnessStore.provider
+    openAIModel = harnessStore.openAIModel
     if cloudStore.isActive { agentRuntime = .cloud }
     if let runtime = machine.record.choices.agentRuntime, runtime != .subscription { agentRuntime = runtime }
     if preview { return }
@@ -231,7 +254,8 @@ final class TBDOnboardingController: ObservableObject {
   /// TBD Dev `--design-shots`: the flow at `step` with fixed choices and checks. Its record lives in a throwaway
   /// suite (cleared first), never in the person's defaults.
   static func preview(step: TBDOnboardingStep, choices: TBDOnboardingChoices, checks: TBDOnboardingChecks,
-                      screenRequested: Bool = false, companionLocal: TBDAgentModelSetup.LocalStatus? = nil) -> TBDOnboardingController {
+                      screenRequested: Bool = false, companionLocal: TBDAgentModelSetup.LocalStatus? = nil,
+                      langchain: Bool = false) -> TBDOnboardingController {
     let suite = TBDIdentity.devBundleID + ".onboarding-shots"
     UserDefaults.standard.removePersistentDomain(forName: suite)
     let store = TBDOnboardingStore(defaults: UserDefaults(suiteName: suite)!)
@@ -240,6 +264,12 @@ final class TBDOnboardingController: ObservableObject {
     flow.checks = checks
     flow.screenRequested = screenRequested
     flow.companionLocalStatus = companionLocal
+    if langchain {
+      flow.harnessShown = .langchain
+      flow.harnessKind = .langchain
+      flow.langchainChecks = [("Installed", true, ""), ("Model", true, "gpt-oss:20b · Ollama on this Mac"),
+                              ("Answers", true, "One reply in this check"), ("TBD's tools", true, "timeline, transcripts, workspace apps")]
+    }
     if let name = checks.agentModelName { flow.agentModel = name }
     return flow
   }
@@ -425,6 +455,75 @@ final class TBDOnboardingController: ObservableObject {
     NSApp.terminate(nil)
     // Still running: the quit was cancelled. The person can try again.
     relaunching = false
+  }
+
+  // MARK: Harness (WP-HARNESS L3)
+
+  /// Back to TBD's agent (Claude Agent SDK); the agent restarts with it.
+  func useTBDAgent() {
+    harnessStore.kind = .claudeAgentSDK
+    harnessKind = .claudeAgentSDK
+    harnessShown = .claudeAgentSDK
+    harnessMessage = nil
+    agentCheckDue = true
+    restartAgent()
+    Task { await refreshChecks() }
+  }
+
+  /// Saves the LangChain agent's model setting, switches TBD's agent to LangChain and runs the 4 checks through the
+  /// helper (restart + one self-test round trip). Anything but a full pass switches back to TBD's agent with the reason.
+  func useLangChain() {
+    guard !harnessBusy, !Self.isTestHost, !isPreview else { return }
+    harnessBusy = true
+    harnessMessage = nil
+    var checks = Self.emptyChecks
+    func done(_ message: String?) {
+      langchainChecks = checks
+      harnessMessage = message
+      harnessBusy = false
+      agentCheckDue = true
+      Task { await refreshChecks() }
+    }
+    func revert(_ message: String) {
+      harnessStore.kind = .claudeAgentSDK
+      harnessKind = .claudeAgentSDK
+      restartAgent()
+      done("\(message) TBD's agent stays on.")
+    }
+    // 1. Installed: the bundled LangChain agent is in this app.
+    let bundle = Bundle.main.resourceURL?.appendingPathComponent("Chat/agent-langchain.mjs")
+    checks[0] = ("Installed", bundle.map { FileManager.default.fileExists(atPath: $0.path) } ?? false, "")
+    guard checks[0].ok == true else { revert("The LangChain agent is not in this build of TBD."); return }
+    // 2. Model: the setting resolves for the LangChain harness.
+    harnessStore.provider = langchainProvider
+    if langchainProvider == .openai {
+      harnessStore.openAIModel = openAIModel
+      do { try harnessStore.saveOpenAIKey(openAIKey); openAIKey = ""; refreshOpenAIKey() } catch { revert(error.localizedDescription); return }
+    }
+    harnessStore.kind = .langchain
+    do {
+      let route = try TBDAgentModelSetup.resolveRoute(registry, cloud: cloudStore, harness: harnessStore)
+      checks[1] = ("Model", true, "\(route.model) · \(route.source)")
+    } catch {
+      checks[1] = ("Model", false, error.localizedDescription)
+      revert(error.localizedDescription); return
+    }
+    // 3 + 4. One round trip and TBD's tools, through the helper (restart with the new harness, then the self-test).
+    Task {
+      let answer = (try? await TBDChatRuntime.shared.accountCall("agentSelfTest")) as? [String: Any] ?? [:]
+      let ok = answer["ok"] as? Bool ?? false
+      checks[2] = ("Answers", ok, ok ? "One reply in this check" : (answer["error"] as? String ?? "No answer from the LangChain agent."))
+      let families = (answer["tools"] as? [String] ?? []).filter { $0 != "ask_person" }
+      let names = families.map { ["companion": "timeline", "listening": "transcripts", "tealbrick": "workspace apps"][$0] ?? $0 }
+      checks[3] = ("TBD's tools", ok && !families.isEmpty, names.isEmpty ? "No TBD tool answered." : names.joined(separator: ", "))
+      guard checks[2].ok == true, checks[3].ok == true else {
+        revert(checks[2].ok == true ? "The LangChain agent could not reach TBD's tools." : "The LangChain agent did not answer: \(checks[2].detail)")
+        return
+      }
+      harnessKind = .langchain
+      machine.update { $0.agent = .yes }
+      done(nil)
+    }
   }
 
   // MARK: Cloud provider (WP-HARNESS step 1)
@@ -712,11 +811,15 @@ struct TBDOnboardingView: View {
       .fixedSize(horizontal: false, vertical: true)
       if flow.agentAnswer == .yes {
         fieldRow("Agent") {
-          TBDTag("TBD's agent", status: .live)
-          Text("Codex, Eve and LangChain: coming later").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+          segment("TBD's agent", selected: flow.harnessShown == .claudeAgentSDK) {
+            if flow.harnessKind == .claudeAgentSDK { flow.harnessShown = .claudeAgentSDK } else { flow.useTBDAgent() }
+          }
+          segment("LangChain agent", selected: flow.harnessShown == .langchain) { flow.harnessShown = .langchain }
+          Text("Codex and Eve: coming later").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
         }
+        if flow.harnessShown == .langchain { panel { langchainPanel } }
         // C287: an Agent SDK app may not offer a subscription login, so TBD's agent shows only these two.
-        fieldRow("Runs on") {
+        if flow.harnessShown == .claudeAgentSDK { fieldRow("Runs on") {
           segment("API key", selected: flow.agentRuntime == .apiKey) {
             flow.agentRuntime = .apiKey
             if flow.agentModel == TBDAgentModelSetup.defaultLocalModel { flow.agentModel = TBDAgentModelSetup.defaultModel }
@@ -727,7 +830,7 @@ struct TBDOnboardingView: View {
           }
           segment("Cloud (Bedrock, Vertex, Foundry)", selected: flow.agentRuntime == .cloud) { flow.agentRuntime = .cloud }
         }
-        if flow.agentRuntime == .cloud { panel { cloudPanel } } else { panel { agentModelPanel } }
+        if flow.agentRuntime == .cloud { panel { cloudPanel } } else { panel { agentModelPanel } } }
         if account.signedIn { panel { pairingPanel } }
       }
     }
@@ -769,6 +872,59 @@ struct TBDOnboardingView: View {
       }
       if flow.agentRuntime == .local, let error = downloads.errors[agentModelName] {
         Text(error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  /// WP-HARNESS L3: the LangChain agent — its model (your Anthropic key or a model on this Mac: the setting below
+  /// "TBD's agent" uses; or your OpenAI key) and the 4 checks that must pass before it is used.
+  private var langchainPanel: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s3) {
+      Text("A LangChain agent bundled with TBD. It uses TBD's tools (timeline, transcripts, workspace apps) and can ask you questions. No shell or file tools in this version.")
+        .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+      HStack(spacing: TBDKit.s2) {
+        segment("Anthropic key or model on this Mac", selected: flow.langchainProvider == .anthropic) { flow.langchainProvider = .anthropic }
+        segment("OpenAI key", selected: flow.langchainProvider == .openai) { flow.langchainProvider = .openai }
+      }
+      if flow.langchainProvider == .openai {
+        cloudField("OpenAI model ID", $flow.openAIModel, mono: true)
+        HStack(spacing: TBDKit.s3) {
+          Text("OpenAI API key").font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted).frame(width: 170, alignment: .leading)
+          SecureField(flow.openAIKeyStored ? "A key is saved. Type a new key to replace it." : "sk-…", text: $flow.openAIKey).textFieldStyle(.roundedBorder)
+        }
+        .onAppear { flow.refreshOpenAIKey() }
+      } else {
+        Text("Uses the model you set up for TBD's agent: \(flow.checks.agentCloud == nil ? (flow.checks.agentModelName ?? "none yet") : "a cloud provider, which LangChain cannot use").")
+          .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+      }
+      HStack(alignment: .top, spacing: TBDKit.s4) {
+        ForEach(flow.langchainChecks.indices, id: \.self) { i in
+          let check = flow.langchainChecks[i]
+          VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: TBDKit.s1) {
+              Image(systemName: check.ok == true ? "checkmark.circle" : check.ok == false ? "xmark.circle" : "circle.dashed")
+                .foregroundStyle(check.ok == true ? TBDColor.tealInk : TBDColor.muted).accessibilityHidden(true)
+              Text("\(i + 1). \(check.name)").font(TBDTokens.Typography.label).foregroundStyle(TBDColor.ink)
+            }
+            if !check.detail.isEmpty {
+              Text(check.detail).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .accessibilityElement(children: .combine)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      HStack(spacing: TBDKit.s3) {
+        if flow.harnessKind == .langchain {
+          TBDTag("In use: LangChain agent", status: .live)
+          Button(flow.harnessBusy ? "Checking…" : "Check again") { flow.useLangChain() }.buttonStyle(TBDButtonStyle(.quiet)).disabled(flow.harnessBusy)
+        } else {
+          Button(flow.harnessBusy ? "Checking…" : "Check and use LangChain agent") { flow.useLangChain() }
+            .buttonStyle(TBDButtonStyle(.primary)).disabled(flow.harnessBusy)
+        }
+        if let message = flow.harnessMessage {
+          Text(message).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
+        }
       }
     }
   }

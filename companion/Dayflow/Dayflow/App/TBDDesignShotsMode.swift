@@ -404,6 +404,8 @@ private enum OnboardingShots {
       ("2-agent-cloud", .preview(step: .agent, choices: .init(portal: .no, agent: .yes, agentRuntime: .cloud),
                                  checks: { var c = TBDOnboardingChecks(agentModelReady: true, agentModelName: "us.anthropic.claude-sonnet-4-6")
                                            c.agentCloud = "Amazon Bedrock"; return c }())),
+      ("2-agent-langchain", .preview(step: .agent, choices: .init(portal: .no, agent: .yes, agentRuntime: .local),
+                                     checks: .init(agentModelReady: true, agentModelName: "gpt-oss:20b"), langchain: true)),
       ("3-permissions", .preview(step: .permissions, choices: .init(portal: .no, agent: .no),
                                  checks: .init(granted: [.microphone, .notifications]), screenRequested: true)),
       ("4-models", .preview(step: .models, choices: .init(portal: .no, agent: .no),

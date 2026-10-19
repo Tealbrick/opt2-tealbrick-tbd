@@ -76,11 +76,13 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
       "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect",
       // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
-      "restartAgent"]
+      "restartAgent",
+      // WP-HARNESS L3: the setup's 4 checks of TBD's agent with the chosen harness.
+      "agentSelfTest"]
     guard allowed.contains(channel) else { throw failure("Unsupported account operation") }
     start()
     guard ready || process?.isRunning == true else { throw failure(status) }
-    return try await hostCall(channel, args: args, timeout: .seconds(["awaitSignIn", "awaitAgentConnect"].contains(channel) ? 660 : 45),
+    return try await hostCall(channel, args: args, timeout: .seconds(["awaitSignIn", "awaitAgentConnect"].contains(channel) ? 660 : channel == "agentSelfTest" ? 120 : 45),
                               timeoutMessage: "Portal operation timed out. Refresh to check current state.")
   }
 
@@ -385,6 +387,7 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
                                    "secretEnv": route.secrets, "source": route.source,
                                    "apiKey": route.secrets["ANTHROPIC_API_KEY"] ?? ""]
       if let base = route.baseURL { answer["baseUrl"] = base }
+      if let provider = route.provider { answer["provider"] = provider }
       return answer
     // Person session (K3): Keychain item tealbrick.person, user presence where available.
     case "personLoad": return try TBDKeychain.personLoad(origin: text) ?? NSNull()
