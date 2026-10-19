@@ -116,9 +116,9 @@ final class FlowTaskBoardSource: ObservableObject {
     var connected = false
     var probe: TBDFlowTaskBoardProbe = .unanswered
     var found: [TBDFlowTaskBoardIssue] = []
-    // The agent and the list are only asked when the plan says Task Board is paid for (no relay for an unpaid app;
-    // an unknown plan stays "checking" until it reads).
-    if access == .unlocked {
+    // The agent and the list are asked when the plan says Task Board is paid for, or when the plan is not known yet
+    // (unknown never locks: a working grant through the relay is proof). Never for a locked or not-installed app.
+    if access == .unlocked || access == .unknown {
       connected = await client.agentConnected()
       if connected {
         do {

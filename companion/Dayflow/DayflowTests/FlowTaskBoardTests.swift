@@ -97,8 +97,11 @@ final class FlowTaskBoardTests: FlowTestCase {
             XCTAssertEqual(board.issues, [], label)
           case (.unlocked, false, _):
             XCTAssertEqual(board.mode, .local(.notConnected), label)
+          case (.unknown, true, true):
+            XCTAssertEqual(board.mode, .taskBoard, "unknown never locks; a working grant is proof: \(label)")
+            XCTAssertEqual(board.issues.map(\.id), ["iss_eyal"], label)
           case (.unknown, _, _):
-            XCTAssertEqual(board.mode, .local(.checking), "unknown never locks and never switches: \(label)")
+            XCTAssertEqual(board.mode, .local(.checking), "unknown without a working grant stays local: \(label)")
             XCTAssertEqual(board.notice, "Checking Task Board…")
           case (.locked, _, _):
             XCTAssertEqual(board.mode, .local(.notLicensed), label)
@@ -106,9 +109,11 @@ final class FlowTaskBoardTests: FlowTestCase {
           case (.install, _, _):
             XCTAssertEqual(board.mode, .local(.installNeeded), label)
           }
-          // The helper is asked for the list only for a paid app with a connected agent.
-          XCTAssertEqual(fake.listCalls, access == .unlocked && connected ? 1 : 0, label)
-          XCTAssertEqual(fake.connectionCalls, access == .unlocked ? 1 : 0, label)
+          // The helper is asked for the list only for a paid (or not yet known) app with a connected agent; never for a
+          // locked or not-installed app.
+          let asks = access == .unlocked || access == .unknown
+          XCTAssertEqual(fake.listCalls, asks && connected ? 1 : 0, label)
+          XCTAssertEqual(fake.connectionCalls, asks ? 1 : 0, label)
         }
       }
     }

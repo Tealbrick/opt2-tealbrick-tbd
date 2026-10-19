@@ -39,7 +39,8 @@ final class TBDFlowTaskBoardTests: TBDFlowTestCase {
             for probe in probes {
                 XCTAssertEqual(TBDFlowSource.decide(access: .locked, agentConnected: connected, probe: probe), .local(.notLicensed))
                 XCTAssertEqual(TBDFlowSource.decide(access: .install, agentConnected: connected, probe: probe), .local(.installNeeded))
-                XCTAssertEqual(TBDFlowSource.decide(access: .unknown, agentConnected: connected, probe: probe), .local(.checking), "unknown never locks, never uses Task Board")
+                let unknown: TBDFlowSourceMode = connected && probe == .available ? .taskBoard : .local(.checking)
+                XCTAssertEqual(TBDFlowSource.decide(access: .unknown, agentConnected: connected, probe: probe), unknown, "unknown never locks; a working grant is proof")
             }
         }
         for probe in probes { XCTAssertEqual(TBDFlowSource.decide(access: .unlocked, agentConnected: false, probe: probe), .local(.notConnected)) }

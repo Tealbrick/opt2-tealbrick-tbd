@@ -94,12 +94,14 @@ public enum TBDFlowTaskBoardProbe: Equatable, Sendable {
 
 public enum TBDFlowSource {
     /// `.taskBoard` only when (a) the plan says Task Board is licensed for the workspace, (b) TBD's agent is connected and
-    /// (c) the list check answered available. An unknown plan never locks: it reads "checking" and the local list stays.
+    /// (c) the list check answered available. An unknown plan never locks (C282): when TBD's agent is connected and the
+    /// relay lists Task Board's tool and answers, that grant is proof enough; otherwise it reads "checking" and the local
+    /// list stays.
     public static func decide(access: TBDAppAccess, agentConnected: Bool, probe: TBDFlowTaskBoardProbe) -> TBDFlowSourceMode {
         switch access {
         case .locked: return .local(.notLicensed)
         case .install: return .local(.installNeeded)
-        case .unknown: return .local(.checking)
+        case .unknown: return agentConnected && probe == .available ? .taskBoard : .local(.checking)
         case .unlocked:
             guard agentConnected else { return .local(.notConnected) }
             switch probe {
