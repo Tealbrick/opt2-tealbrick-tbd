@@ -20,8 +20,10 @@ export const GATED_APPS = {
 } as const;
 export type GatedApp = keyof typeof GATED_APPS;
 
-/** unlocked = paid, installed and running; install = paid but not (yet) running in this workspace; locked = not paid. */
-export type AppAccess = "unlocked" | "install" | "locked";
+/** unlocked = paid, installed and running; install = paid but not (yet) running in this workspace; locked = not paid;
+ *  unknown = the plan could not be read or had an unexpected shape. Fail-safe (Coordinator, dev.12): unknown NEVER locks
+ *  a function — Core still enforces the plan on every call; TBD only shows "Could not check your plan". */
+export type AppAccess = "unlocked" | "install" | "locked" | "unknown";
 
 export interface AppEntitlement {
   access: AppAccess;
@@ -39,6 +41,23 @@ export interface EntitlementSnapshot {
 }
 
 const LOCKED: AppEntitlement = { access: "locked", paid: false, installed: false };
+
+/** The plan could not be read (no good read yet): every app unknown, never locked. */
+export function unknownSnapshot(ws: string | null, error: string): EntitlementSnapshot {
+  const apps = Object.fromEntries(Object.keys(GATED_APPS).map((id) => [id, { access: "unknown", paid: false, installed: false }])) as Record<GatedApp, AppEntitlement>;
+  return { ws, fetchedAt: 0, error, apps };
+}
+
+/** Fail-safe: the reads must have the contract's shape (@opt2-tealbrick/spec Licence / Instance); else nothing is decided. */
+export function checkShape(licences: unknown, instances: unknown): void {
+  const isText = (v: unknown) => typeof v === "string";
+  const okLicence = (l: unknown) => !!l && typeof l === "object" && isText((l as Licence).product) && isText((l as Licence).status)
+    && ((l as Licence).assignment === null || (l as Licence).assignment === undefined || (typeof (l as Licence).assignment === "object" && isText((l as Licence).assignment?.ws)));
+  const okInstance = (i: unknown) => !!i && typeof i === "object" && isText((i as Instance).product) && isText((i as Instance).ws)
+    && isText((i as Instance).state) && typeof (i as Instance).licensed === "boolean";
+  if (!Array.isArray(licences) || !licences.every(okLicence)) throw new Error("unexpected licences shape");
+  if (!Array.isArray(instances) || !instances.every(okInstance)) throw new Error("unexpected instances shape");
+}
 
 export function emptySnapshot(ws: string | null): EntitlementSnapshot {
   const apps = Object.fromEntries(Object.keys(GATED_APPS).map((id) => [id, { ...LOCKED }])) as Record<GatedApp, AppEntitlement>;
@@ -61,7 +80,7 @@ export function computeEntitlements(ws: string, licences: readonly Licence[], in
 /** The sentence a locked function shows. */
 export function availabilityText(app: GatedApp, access: AppAccess): string | null {
   const name = GATED_APPS[app];
-  if (access === "unlocked") return null;
+  if (access === "unlocked" || access === "unknown") return null;
   if (access === "install") return `Install ${name} in Portal to use this.`;
   return `Available with ${name}.`;
 }
@@ -80,7 +99,8 @@ export function shapeOf(value: unknown, depth = 0): string {
   return "";
 }
 
-/** Reads and caches the snapshot; an error keeps the last good one (a Portal outage never locks paid functions). */
+/** Reads and caches the snapshot. An error or an unexpected shape keeps the last good read for this workspace; with no
+ *  good read, every app is "unknown" (never locked). A Portal outage never locks a paid function. */
 export function createEntitlements(deps: {
   licences: () => Promise<Licence[]>;
   instances: (ws: string) => Promise<{ items: Instance[] }>;
@@ -98,11 +118,12 @@ export function createEntitlements(deps: {
       }
       try {
         const [licences, instances] = await Promise.all([deps.licences(), deps.instances(ws)]);
-        deps.log?.(`entitlements shape: licences ${shapeOf(licences)} instances ${shapeOf(instances.items)}`);
+        deps.log?.(`entitlements shape: licences ${shapeOf(licences)} instances ${shapeOf(instances?.items)}`);
+        checkShape(licences, instances?.items);
         last = computeEntitlements(ws, licences, instances.items, now());
       } catch (error) {
-        const kept = last.ws === ws ? last : emptySnapshot(ws);
-        last = { ...kept, error: error instanceof Error ? error.message : String(error) };
+        const message = error instanceof Error ? error.message : String(error);
+        last = last.ws === ws && last.fetchedAt > 0 ? { ...last, error: message } : unknownSnapshot(ws, message);
       }
       return last;
     },

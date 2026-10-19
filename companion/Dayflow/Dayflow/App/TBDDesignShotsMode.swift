@@ -130,6 +130,10 @@
         for (name, flow) in OnboardingShots.screens() {
           try render(TBDOnboardingView(flow: flow), size: main, dark: dark, name: "onboarding-\(name)-\(theme)")
         }
+        // The summary scrolls at 800 pt with eight lines; the larger window shows every line (paid-app line, WP1b).
+        for (name, flow) in OnboardingShots.screens() where name.hasPrefix("5-summary") {
+          try render(TBDOnboardingView(flow: flow), size: wide, dark: dark, name: "onboarding-\(name)-1600-\(theme)")
+        }
         try render(StatusMenuView(dismissMenu: {}), size: CGSize(width: 320, height: 640), dark: dark, name: "menu-\(theme)")
       }
 

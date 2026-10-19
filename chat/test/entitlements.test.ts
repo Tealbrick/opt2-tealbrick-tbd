@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Instance, Licence } from "@opt2-tealbrick/spec/routes";
-import { availabilityText, computeEntitlements, createEntitlements, shapeOf } from "../src/main/entitlements.ts";
+import { availabilityText, checkShape, computeEntitlements, createEntitlements, shapeOf } from "../src/main/entitlements.ts";
 
 const WS = "ws_1";
 function licence(product: string, over: Partial<Licence> = {}): Licence {
@@ -57,10 +57,10 @@ test("C282: a failed read keeps the last good snapshot (a Portal outage never lo
   const kept = await ent.refresh(WS);
   assert.equal(kept.apps.rules.access, "unlocked");
   assert.equal(kept.error, "Portal answered 503");
-  // A different workspace with a failed read: nothing is unlocked.
+  // A different workspace with a failed read: nothing is unlocked, and nothing is locked either (fail-safe: unknown).
   const other = await ent.refresh("ws_2");
   assert.equal(other.ws, "ws_2");
-  assert.equal(other.apps.rules.access, "locked");
+  assert.equal(other.apps.rules.access, "unknown");
   assert.equal((await ent.refresh(null)).ws, null);
 });
 
@@ -76,4 +76,34 @@ test("C282 proof log: field names and counts only, never values", async () => {
   assert.match(lines[0]!, /licences \[1\]\{assignment\{assignedAt,workspaceName,ws\},createdAt,fromBundle,id,/);
   assert.ok(!lines[0]!.includes("SECRETVALUE") && !lines[0]!.includes(WS) && !lines[0]!.includes("rules"), lines[0]);
   assert.equal(shapeOf([]), "[0]");
+});
+
+// Fail-safe (Coordinator, dev.12): an unreadable or unexpected plan never locks a function.
+test("fail-safe: a read error with no good read gives unknown (never locked); unknown shows no lock text", async () => {
+  const ent = createEntitlements({ licences: async () => { throw new Error("502"); }, instances: async () => ({ items: [] }), now: () => 9 });
+  const s = await ent.refresh(WS);
+  for (const app of Object.values(s.apps)) assert.equal(app.access, "unknown");
+  assert.equal(s.error, "502");
+  assert.equal(availabilityText("knowledge", "unknown"), null);
+});
+
+test("fail-safe: an unexpected shape is unknown, not locked; the last good read for the workspace is kept", async () => {
+  let shape: "good" | "bad" = "bad";
+  const ent = createEntitlements({
+    licences: async () => (shape === "good" ? [licence("knowledge")] : ([{ product: 7 }] as unknown as Licence[])),
+    instances: async () => ({ items: [instance("knowledge")] }), now: () => 1,
+  });
+  assert.equal((await ent.refresh(WS)).apps.knowledge.access, "unknown");
+  shape = "good";
+  assert.equal((await ent.refresh(WS)).apps.knowledge.access, "unlocked");
+  shape = "bad";
+  const kept = await ent.refresh(WS);
+  assert.equal(kept.apps.knowledge.access, "unlocked", "the last good read stays");
+  assert.match(kept.error ?? "", /unexpected licences shape/);
+});
+
+test("fail-safe: checkShape accepts the contract's rows and refuses others", () => {
+  checkShape([licence("rules"), licence("inbox", { assignment: null })], [instance("rules")]);
+  assert.throws(() => checkShape({ items: [] }, []), /licences/);
+  assert.throws(() => checkShape([], [{ product: "rules", ws: WS, state: "running" }]), /instances/);
 });

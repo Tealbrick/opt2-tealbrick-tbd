@@ -433,8 +433,13 @@ final class TBDHelperLog: @unchecked Sendable {
   }
   /// One stderr line from the helper; kept only when it describes an error.
   func record(_ line: Data) {
-    guard let text = String(data: line, encoding: .utf8)?.trimmingCharacters(in: .whitespaces), !text.isEmpty,
-      Self.errorLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else { return }
+    guard let text = String(data: line, encoding: .utf8)?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return }
+    #if DEBUG
+      // TBD_SHAPE_LOG=1 (TBD Dev): the helper's shape-only lines (field names and counts) for QA's live proof (C282).
+      // Release keeps error lines only, so the variable has no effect there.
+      if text.hasPrefix("[helper:shape]") { write(Self.redact(text)); return }
+    #endif
+    guard Self.errorLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else { return }
     write(Self.redact(text))
   }
   /// A host-side event (no helper output involved).

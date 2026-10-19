@@ -4,27 +4,29 @@ import TBDModels
 
 /// C282: the native side reads the helper's entitlement snapshot and shows the same sentences as the helper.
 final class EntitlementsTests: XCTestCase {
-    func testTheHelperSnapshotIsParsedAndNothingUnknownUnlocks() {
+    func testTheHelperSnapshotIsParsedAndNothingUnknownUnlocksOrLocks() {
         let value: [String: Any] = ["ws": "ws_1", "fetchedAt": 5, "apps": [
             "rules": ["access": "unlocked", "paid": true, "installed": true],
             "kanban": ["access": "install"],
             "knowledge": ["access": "locked"],
             "marketplace": ["access": "unlocked"],   // not a gated app: ignored
-            "connect": ["access": "maybe"],          // unknown value: locked
+            "connect": ["access": "maybe"],          // unexpected value: unknown (fail-safe)
         ]]
         let ent = TBDEntitlements(helperValue: value)
         XCTAssertEqual(ent.workspace, "ws_1")
         XCTAssertEqual(ent.access(.rules), .unlocked)
         XCTAssertEqual(ent.access(.kanban), .install)
         XCTAssertEqual(ent.access(.knowledge), .locked)
-        XCTAssertEqual(ent.access(.connect), .locked)
-        XCTAssertEqual(ent.access(.inbox), .locked, "missing = locked")
-        XCTAssertEqual(TBDEntitlements(helperValue: nil), .none)
-        XCTAssertEqual(TBDEntitlements(helperValue: "garbage").access(.rules), .locked)
+        // Fail-safe (dev.12): what the helper did not say is unknown — never unlocked, never locking a function.
+        XCTAssertEqual(ent.access(.connect), .unknown)
+        XCTAssertEqual(ent.access(.inbox), .unknown, "missing = unknown")
+        XCTAssertNil(ent.availability(.inbox))
+        XCTAssertEqual(TBDEntitlements(helperValue: nil), .unknown)
+        XCTAssertEqual(TBDEntitlements(helperValue: "garbage").access(.rules), .unknown)
     }
 
     func testSentencesMatchTheHelper() throws {
-        let ent = TBDEntitlements(apps: [.rules: .install, .knowledge: .unlocked], workspace: "ws_1")
+        let ent = TBDEntitlements(apps: [.rules: .install, .knowledge: .unlocked, .kanban: .locked], workspace: "ws_1")
         XCTAssertEqual(ent.availability(.rules), "Install Rules & Approvals in Portal to use this.")
         XCTAssertEqual(ent.availability(.kanban), "Available with Task Board.")
         XCTAssertNil(ent.availability(.knowledge))

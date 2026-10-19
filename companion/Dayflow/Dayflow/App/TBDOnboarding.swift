@@ -546,7 +546,7 @@ struct TBDOnboardingView: View {
         .frame(width: cardWidth)
         TBDStepFlow(steps: steps,
                     current: Binding(get: { flow.step.index }, set: { flow.move(to: $0) }),
-                    size: CGSize(width: cardWidth, height: max(420, min(640, geo.size.height - 150)))) {
+                    size: CGSize(width: cardWidth, height: max(420, min(900, geo.size.height - 150)))) {
           flow.finish()
         }
         .overlay(TBDBrickShape().strokeBorder(TBDColor.line, lineWidth: TBDKit.hair))
@@ -1041,10 +1041,10 @@ struct TBDOnboardingView: View {
   /// A missing area is never red: a "No" is a valid answer.
   private func summaryLine(_ line: TBDOnboardingLine) -> some View {
     HStack(spacing: TBDKit.s3) {
-      Image(systemName: line.on ? "checkmark.circle" : "circle.dashed")
+      Image(systemName: line.on ? "checkmark.circle" : line.neutral ? "questionmark.circle" : "circle.dashed")
         .foregroundStyle(line.on ? TBDColor.tealInk : TBDColor.muted).frame(width: 22).accessibilityHidden(true)
       Text(line.area).font(TBDTokens.Typography.control).foregroundStyle(TBDColor.ink).frame(width: 190, alignment: .leading)
-      Text(line.text).font(TBDTokens.Typography.hint).foregroundStyle(line.on ? TBDColor.inkSoft : TBDColor.ink)
+      Text(line.text).font(TBDTokens.Typography.hint).foregroundStyle(line.on || line.neutral ? TBDColor.inkSoft : TBDColor.ink)
         .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: TBDKit.s3)
       Button(line.action) {
@@ -1053,7 +1053,7 @@ struct TBDOnboardingView: View {
         case .portal: if let url = URL(string: "https://portal.tealbrick.com") { NSWorkspace.shared.open(url) }
         }
       }
-      .buttonStyle(TBDButtonStyle(line.on ? .quiet : .secondary))
+      .buttonStyle(TBDButtonStyle(line.on || line.neutral ? .quiet : .secondary))
       // VoiceOver says the action and the area ("Sign in, Workspace"); the line's text stays its own element
       // (a combined element hid the action word, dev.9 follow-up 1).
       .accessibilityLabel("\(line.action), \(line.area)")

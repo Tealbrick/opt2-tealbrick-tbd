@@ -297,14 +297,16 @@ public struct TBDOnboardingLine: Equatable, Sendable {
     public let text: String
     public let action: String
     public let fix: Fix
+    /// Neither on nor off: TBD could not check (the plan). Not counted as "off" in the headline.
+    public var neutral = false
 }
 
 public enum TBDOnboardingSummary {
     /// One line per area, in the spec's order. Dictation lists each missing piece in its own line.
     public static func lines(_ c: TBDOnboardingChecks) -> [TBDOnboardingLine] {
         var out: [TBDOnboardingLine] = []
-        func add(_ area: String, _ on: Bool, _ text: String, _ action: String, _ fix: TBDOnboardingLine.Fix) {
-            out.append(TBDOnboardingLine(area: area, on: on, text: text, action: action, fix: fix))
+        func add(_ area: String, _ on: Bool, _ text: String, _ action: String, _ fix: TBDOnboardingLine.Fix, neutral: Bool = false) {
+            out.append(TBDOnboardingLine(area: area, on: on, text: text, action: action, fix: fix, neutral: neutral))
         }
         if c.signedIn, let ws = c.workspaceName {
             add("Workspace", true, "Signed in to \(ws). Your workspace agents and teams are in Chat.", "Change", .step(.portal))
@@ -366,6 +368,9 @@ public enum TBDOnboardingSummary {
                     add(app.name, false, "Your plan has \(app.name). Install it in your workspace to use \(app.function).", "Open in Portal", .portal(app: app.name))
                 case .locked:
                     add(app.name, false, "\(app.name) is not in your workspace plan.", "Open in Portal", .portal(app: app.name))
+                case .unknown:
+                    add(app.name, false, "Could not check your plan. \(app.function) is not locked; open Portal to see your plan.",
+                        "Open Portal", .portal(app: app.name), neutral: true)
                 }
             }
         }
@@ -376,7 +381,7 @@ public enum TBDOnboardingSummary {
 
     /// "Everything is ready." or "TBD works. <n> things are off." (one thing: "1 thing is off").
     public static func headline(_ lines: [TBDOnboardingLine]) -> String {
-        let off = lines.filter { !$0.on }.count
+        let off = lines.filter { !$0.on && !$0.neutral }.count
         switch off {
         case 0: return "Everything is ready."
         case 1: return "TBD works. 1 thing is off."

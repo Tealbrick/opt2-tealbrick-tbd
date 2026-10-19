@@ -232,8 +232,17 @@ final class TBDOnboardingTests: XCTestCase {
         XCTAssertEqual(line?.on, false)
         XCTAssertEqual(line?.text, "Your plan has Knowledge. Install it in your workspace to use Save to Knowledge.")
         XCTAssertEqual(line?.fix, .portal(app: "Knowledge"))
-        // Unknown (no read) = locked: never unlock without a read (C282).
-        XCTAssertEqual(TBDEntitlements.none.summaryChecks.first?.access, .locked)
+        // Fail-safe (dev.12): an unreadable plan is unknown — a neutral line, not "off", and no lock.
+        XCTAssertEqual(TBDEntitlements(helperValue: "garbage").summaryChecks.first?.access, .unknown)
+        XCTAssertNil(TBDEntitlements(helperValue: nil).availability(.knowledge), "unknown never locks Save to Knowledge")
+        XCTAssertNil(TBDEntitlements(helperValue: ["ws": "w", "apps": [:]]).availability(.knowledge), "a missing app is unknown")
+        let unknownLines = TBDOnboardingSummary.lines(TBDOnboardingChecks(signedIn: true, workspaceName: "W", agentModelReady: true, agentPaired: true,
+            granted: Set(TBDOnboardingPermission.allCases), companionModelReady: true, speechModelOnDisk: true,
+            paidApps: TBDEntitlements.unknown.summaryChecks))
+        let neutral = unknownLines.first { $0.area == "Knowledge" }
+        XCTAssertEqual(neutral?.neutral, true)
+        XCTAssertEqual(neutral?.text, "Could not check your plan. Save to Knowledge is not locked; open Portal to see your plan.")
+        XCTAssertEqual(TBDOnboardingSummary.headline(unknownLines), "Everything is ready.", "a neutral line is not counted as off")
         let unlocked = TBDEntitlements(apps: [.knowledge: .unlocked], workspace: "ws1").summaryChecks
         XCTAssertEqual(TBDOnboardingSummary.lines(TBDOnboardingChecks(signedIn: true, workspaceName: "W", paidApps: unlocked))
             .first { $0.area == "Knowledge" }?.text, "Save to Knowledge works.")
