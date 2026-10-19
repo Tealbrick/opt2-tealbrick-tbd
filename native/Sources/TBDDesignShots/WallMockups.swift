@@ -188,7 +188,7 @@ struct WallPlan {
             let tone: AgentBrickTone? = agent.own ? .deep : agent.state == .online ? .teal : agent.state == .paused ? .amber : nil
             if let tone { bricks.append(AgentWallBrick(course: course, x: x0, tone: tone)) }
             callouts.append(AgentWallCallout(id: agent.name, course: course, x: x0 + AgentWallTile.brickW / 2, title: agent.name,
-                                             meta: "\(agent.harness) · \(agent.state.rawValue)"))
+                                             meta: "\(agent.harness)\n\(agent.state.rawValue)"))  // two short lines: neighbours one brick apart never touch
         }
         self.bricks = bricks
         self.callouts = callouts
@@ -311,7 +311,7 @@ struct WallBand: View {
             ForEach(pl) { p in
                 VStack(alignment: .leading, spacing: 0) {
                     Text(p.title).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.ink)
-                    Text(p.meta).font(TBDFonts.mono(10)).foregroundStyle(TBDColor.muted).padding(.top, 2)
+                    Text(p.meta).font(TBDFonts.mono(10)).foregroundStyle(TBDColor.muted).lineLimit(2).fixedSize().padding(.top, 2)
                 }
                 .lineLimit(1).fixedSize()
                 .offset(x: p.rect.midX + 6, y: p.labelY)
