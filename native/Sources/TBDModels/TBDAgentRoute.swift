@@ -132,6 +132,9 @@ public struct TBDAgentCloudStore: @unchecked Sendable {
     /// Back to the registry's "agent" route (API key / local model). The cloud setting stays for later.
     public func deactivate() { defaults.removeObject(forKey: Self.sourceKey) }
 
+    /// Removes a stored key (an expired Bedrock API key would otherwise override the AWS profile; review dev.10 #2).
+    public func removeKey(_ provider: TBDAgentCloudProvider) throws { try secrets.remove(secretKey(provider)) }
+
     public func hasKey(_ provider: TBDAgentCloudProvider) -> Bool { ((try? secrets.get(secretKey(provider))) ?? nil) != nil }
     func key(_ provider: TBDAgentCloudProvider) throws -> String? { try secrets.get(secretKey(provider)) }
 }

@@ -9,7 +9,8 @@ public enum TBDOllamaPull {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model, "stream": true])
-        // A large model takes many minutes; the stream keeps the connection busy.
+        // An idle timeout (no data for this long), not a total: a large model takes many minutes and the stream keeps
+        // sending progress lines.
         request.timeoutInterval = 600
         return request
     }

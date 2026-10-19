@@ -23,7 +23,10 @@ final class TBDOnboardingController: ObservableObject {
 
   // Step 2: TBD's agent model (API key or Ollama on this Mac; no subscription for the Agent SDK, C287).
   @Published var agentRuntime: TBDOnboardingRuntime = .local
-  @Published var agentModel = TBDAgentModelSetup.defaultLocalModel
+  @Published var agentModel = TBDAgentModelSetup.defaultLocalModel {
+    // A status checked for another model name must not offer "Download" for this one (review dev.10 #4).
+    didSet { if agentModel != oldValue { agentLocalStatus = nil } }
+  }
   @Published var agentKey = ""
   @Published private(set) var agentTest: String?
   @Published private(set) var agentTestOK = false
@@ -36,6 +39,12 @@ final class TBDOnboardingController: ObservableObject {
   @Published var cloud = TBDAgentCloud(provider: .bedrock, model: TBDAgentCloudProvider.bedrock.exampleModel, region: "us-east-1")
   @Published var cloudKey = ""
   @Published private(set) var cloudMessage: String?
+  /// Whether a key for the shown provider is in the Keychain (read when the panel shows, after Save and Remove).
+  @Published private(set) var cloudKeyStored = false
+  /// The Companion's local model could not be made its model (review dev.10 #5).
+  @Published private(set) var companionMessage: String?
+  /// The shown cloud fields are the active, saved setting (the "Saved" tag shows only then; review dev.10 #6).
+  var cloudSaved: Bool { cloudStore.isActive && cloudStore.load() == cloud }
   /// Ollama on this Mac: status for the agent's model (after a test) and for the Companion's recommended model.
   @Published private(set) var agentLocalStatus: TBDAgentModelSetup.LocalStatus?
   @Published private(set) var companionLocalStatus: TBDAgentModelSetup.LocalStatus?
@@ -299,6 +308,7 @@ final class TBDOnboardingController: ObservableObject {
                                       model: model, registry: registry)
           // The tested route is now TBD's agent's route; a cloud setting stays saved for later.
           cloudStore.deactivate()
+          restartAgent()
           agentKey = ""
         } catch { agentTest = error.localizedDescription; agentTesting = false; return }
       }
@@ -393,12 +403,29 @@ final class TBDOnboardingController: ObservableObject {
       try cloudStore.save(cloud, key: typed)
       cloudKey = ""
       cloudMessage = nil
+      refreshCloudKey()
       machine.update { $0.agent = .yes; $0.agentRuntime = .cloud }
       agentCheckDue = true
+      restartAgent()
       Task { await refreshChecks() }
     } catch {
       cloudMessage = error.localizedDescription
     }
+  }
+
+  func refreshCloudKey() { cloudKeyStored = cloud.secretName != nil && cloudStore.hasKey(cloud.provider) }
+
+  /// Removes the stored key for the shown provider (Bedrock then uses the AWS profile again).
+  func removeCloudKey() {
+    do { try cloudStore.removeKey(cloud.provider); cloudMessage = nil } catch { cloudMessage = error.localizedDescription }
+    refreshCloudKey()
+    if cloudStore.isActive { agentCheckDue = true; restartAgent(); Task { await refreshChecks() } }
+  }
+
+  /// TBD's agent starts again with the saved route (it reuses a running process otherwise; review dev.10 #6).
+  private func restartAgent() {
+    guard !Self.isTestHost, !isPreview else { return }
+    Task { _ = try? await TBDChatRuntime.shared.accountCall("restartAgent", args: ["tbd-default"]) }
   }
 
   func chooseCloud(_ provider: TBDAgentCloudProvider) {
@@ -407,6 +434,7 @@ final class TBDOnboardingController: ObservableObject {
       ?? TBDAgentCloud(provider: provider, model: provider.exampleModel, region: provider == .vertex ? "us-east5" : provider == .bedrock ? "us-east-1" : "")
     cloudKey = ""
     cloudMessage = nil
+    refreshCloudKey()
   }
 
   // MARK: Downloads into Ollama (dev.10)
@@ -420,13 +448,18 @@ final class TBDOnboardingController: ObservableObject {
   /// The Companion's recommended model: download it into Ollama (or use it when it is there) and make it the
   /// Companion's model, as the Settings upgrade sheet does.
   func useCompanionLocalModel() {
-    machine.update { $0.companion = .yes; $0.companionRuntime = .local }
+    companionMessage = nil
     let model = companionLocalModel
     let configure: @MainActor () -> Void = { [weak self] in
       guard let self else { return }
       self.providers.loadRouting()
       self.providers.handleUpgradeSuccess(engine: .ollama, baseURL: LocalEngine.ollama.defaultBaseURL, modelId: model, apiKey: "")
-      self.providers.assignPrimaryProvider(.local)
+      // It replaces the Companion's current model, as choosing it in Settings does; "yes" only when it worked.
+      if self.providers.assignPrimaryProvider(.local) {
+        self.machine.update { $0.companion = .yes; $0.companionRuntime = .local }
+      } else {
+        self.companionMessage = "TBD could not make Qwen3-VL 4B the model for Daily and Weekly. Choose it in Settings › Models › Advanced."
+      }
       Task { await self.refreshChecks() }
     }
     if companionLocalStatus == .ready { configure() } else { downloads.pull(model, done: configure) }
@@ -656,12 +689,12 @@ struct TBDOnboardingView: View {
   private var agentModelPanel: some View {
     VStack(alignment: .leading, spacing: TBDKit.s3) {
       if flow.agentRuntime == .local {
-        Text("Ollama on this Mac. TBD does not download this model. In Terminal, run: ollama pull \(flow.agentModel.trimmingCharacters(in: .whitespaces))")
+        Text("Uses Ollama on this Mac. \"Test and save\" checks that the model is there; if it is missing, TBD can download it.")
           .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
       } else {
         HStack(spacing: TBDKit.s3) {
           Text("Anthropic API key").font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted).frame(width: 140, alignment: .leading)
-          SecureField(flow.checks.agentModelReady ? "Saved. Type a new key to replace it." : "sk-ant-…", text: $flow.agentKey)
+          SecureField(flow.checks.agentModelReady && flow.checks.agentCloud == nil ? "Saved. Type a new key to replace it." : "sk-ant-…", text: $flow.agentKey)
             .textFieldStyle(.roundedBorder)
         }
       }
@@ -672,7 +705,7 @@ struct TBDOnboardingView: View {
       HStack(spacing: TBDKit.s3) {
         Button(flow.agentTesting ? "Testing…" : "Test and save") { flow.testAgent() }
           .buttonStyle(TBDButtonStyle(.secondary)).disabled(flow.agentTesting)
-        if flow.agentTestOK || (flow.agentTest == nil && flow.checks.agentModelReady) {
+        if flow.agentTestOK || (flow.agentTest == nil && flow.checks.agentModelReady && flow.checks.agentCloud == nil) {
           TBDTag(flow.agentTestOK ? "Works · saved" : "Set up: \(flow.checks.agentModelName ?? "")", status: .live)
         } else if let message = flow.agentTest {
           Text(message).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
@@ -719,9 +752,9 @@ struct TBDOnboardingView: View {
         Button("Save") { flow.saveCloud() }.buttonStyle(TBDButtonStyle(.secondary))
         if let message = flow.cloudMessage {
           Text(message).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink)
-        } else if flow.checks.agentCloud != nil && flow.checks.agentModelReady {
-          TBDTag("Saved: \(flow.checks.agentCloud ?? "")", status: .live)
-          Text("Your first chat message checks the connection.").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
+        } else if flow.cloudSaved && flow.checks.agentModelReady {
+          TBDTag("Saved: \(flow.cloud.provider.title)", status: .live)
+          Text("Not tested yet: your first chat message checks the connection.").font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted)
         }
       }
     }
@@ -745,8 +778,12 @@ struct TBDOnboardingView: View {
   private func cloudSecret(_ label: String) -> some View {
     HStack(spacing: TBDKit.s3) {
       Text(label).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted).frame(width: 170, alignment: .leading)
-      SecureField(flow.cloud.secretName.map { _ in "Saved keys stay in the Keychain" } ?? "", text: $flow.cloudKey).textFieldStyle(.roundedBorder)
+      SecureField(flow.cloudKeyStored ? "A key is saved. Type a new key to replace it." : "", text: $flow.cloudKey).textFieldStyle(.roundedBorder)
+      if flow.cloudKeyStored {
+        Button("Remove key") { flow.removeCloudKey() }.buttonStyle(TBDButtonStyle(.quiet))
+      }
     }
+    .onAppear { flow.refreshCloudKey() }
   }
 
   private var pairingPanel: some View {
@@ -916,6 +953,9 @@ struct TBDOnboardingView: View {
       } else if flow.companionLocalStatus == .notRunning {
         Text("Ollama is not running on this Mac. Install it from ollama.com and open it, then push \"Check again\".")
           .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
+      }
+      if let message = flow.companionMessage {
+        Text(message).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)
       }
       if let error = downloads.errors[flow.companionLocalModel] {
         Text(error).font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.ink).fixedSize(horizontal: false, vertical: true)

@@ -13,10 +13,15 @@ final class TBDLocalModelDownload: ObservableObject {
   /// The last failure per model, in plain words.
   @Published private(set) var errors: [String: String] = [:]
 
+  /// What to run when a model's download succeeds (every caller's, also a second start while it runs).
+  private var onDone: [String: [@MainActor () -> Void]] = [:]
+
   private init() {}
 
-  /// Starts the download once; `done` runs on success.
+  /// Starts the download once; `done` runs on success. The task is not cancellable by design: it continues in the
+  /// background when the person goes on, like the speech model (C286 F3).
   func pull(_ model: String, done: @escaping @MainActor () -> Void) {
+    onDone[model, default: []].append(done)
     guard progress[model] == nil else { return }
     progress[model] = 0
     errors[model] = nil
@@ -25,8 +30,12 @@ final class TBDLocalModelDownload: ObservableObject {
       do {
         let (bytes, response) = try await URLSession.shared.bytes(for: TBDOllamaPull.request(model: model))
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+          // Ollama explains a refusal in the body ({"error": "..."}); show its words (review dev.10 #3).
+          var body = ""
+          for try await line in bytes.lines { body += line; if body.count > 2000 { break } }
+          tracker.read(body)
           throw NSError(domain: "TBD.Ollama", code: (response as? HTTPURLResponse)?.statusCode ?? 0,
-                        userInfo: [NSLocalizedDescriptionKey: "Ollama did not accept the download."])
+                        userInfo: [NSLocalizedDescriptionKey: tracker.error ?? "Ollama did not accept the download."])
         }
         var shown = 0.0
         for try await line in bytes.lines {
@@ -41,8 +50,14 @@ final class TBDLocalModelDownload: ObservableObject {
         errors[model] = error.localizedDescription
       }
       if let message = tracker.error { errors[model] = message }
+      if !tracker.done && errors[model] == nil {
+        // The stream ended without "success" (Ollama quit, the network dropped): say so (review dev.10 #3).
+        errors[model] = "The download stopped before it finished. Try again."
+      }
       progress[model] = nil
-      if tracker.done { done() }
+      let handlers = onDone[model] ?? []
+      onDone[model] = nil
+      if tracker.done { handlers.forEach { $0() } }
     }
   }
 }

@@ -50,6 +50,10 @@ final class TBDAgentRouteTests: XCTestCase {
         // An optional Bedrock API key goes only to its own variable.
         try cloud.save(TBDAgentCloud(provider: .bedrock, model: "m", region: "eu-west-1"), key: " br-key ")
         XCTAssertEqual(try TBDAgentModelSetup.resolveRoute(registry, cloud: cloud).secrets, ["AWS_BEARER_TOKEN_BEDROCK": "br-key"])
+        // An expired key can be removed: back to the AWS profile.
+        try cloud.removeKey(.bedrock)
+        XCTAssertFalse(cloud.hasKey(.bedrock))
+        XCTAssertEqual(try TBDAgentModelSetup.resolveRoute(registry, cloud: cloud).secrets, [:])
     }
 
     func testVertexNeedsProjectAndRegionAndTakesNoKey() throws {

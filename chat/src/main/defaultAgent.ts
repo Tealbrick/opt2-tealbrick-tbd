@@ -137,7 +137,9 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
   const turns = new Map<string, PendingTurn>();
 
   const send = (m: HelperToAgent) => child?.stdin.write(`${JSON.stringify(m)}\n`);
-  /** The person's model credential values of the running agent: scrubbed from every text that comes back. */
+  /** The person's model credential values of the running agent: scrubbed from every text that comes back. A key
+   *  split across two streamed deltas is not caught; the model never receives the key, so only whole provider
+   *  error texts are expected to quote it. */
   let secretValues: string[] = [];
   const scrub = (text: string): string => secretValues.reduce((t, v) => (v.length >= 8 ? t.split(v).join("[redacted key]") : t), text);
 
@@ -185,12 +187,14 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else if (e.kind === "activity") t.onActivity(e.label === null ? null : scrub(e.label));
       else if (e.kind === "session") { t.sessionId = e.sessionId; t.onTurn?.({ sessionId: e.sessionId, turnId: m.id }); }
     } else if (m.type === "permission_request") {
-      void deps.permission({ tool: m.tool, detail: m.detail, input: m.input ?? {} })
+      // The consent card shows detail and input: scrubbed like every other text from the agent.
+      const input = JSON.parse(scrub(JSON.stringify(m.input ?? {}))) as Record<string, unknown>;
+      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input })
         .then((d) => send({ type: "permission", reqId: m.reqId, allow: d.allow, message: d.message }))
         .catch(() => send({ type: "permission", reqId: m.reqId, allow: false }));
     } else if (m.type === "question") {
       const t = turns.get(m.id);
-      if (t?.onQuestion) t.onQuestion({ reqId: m.reqId, questions: m.questions ?? [] });
+      if (t?.onQuestion) t.onQuestion({ reqId: m.reqId, questions: JSON.parse(scrub(JSON.stringify(m.questions ?? []))) as AgentQuestion[] });
       else send({ type: "answer", reqId: m.reqId, answers: null });
     } else if (m.type === "done") {
       const t = turns.get(m.id);

@@ -55,3 +55,28 @@ test("harness: the helper's and the agent's name lists are the same", () => {
   assert.deepEqual([...MODEL_PLAIN_NAMES].sort(), [...AGENT_PLAIN].sort());
   assert.deepEqual([...MODEL_SECRET_NAMES].sort(), [...AGENT_SECRET].sort());
 });
+
+// Review dev.10 #1: every registry route keeps its gateway settings end to end (route → initModel → modelEnv).
+test("harness: a local Ollama route keeps the gateway pins end to end", () => {
+  const route = { model: "gpt-oss:20b", baseUrl: "http://localhost:11434", apiKey: "ollama", secretEnv: { ANTHROPIC_API_KEY: "ollama" } };
+  const env = modelEnv(claudeAgentSdk.initModel(route), claudeAgentSdk.processEnv(route, host));
+  assert.deepEqual(env, {
+    ANTHROPIC_BASE_URL: "http://localhost:11434", CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "gpt-oss:20b", ANTHROPIC_DEFAULT_SONNET_MODEL: "gpt-oss:20b", ANTHROPIC_DEFAULT_OPUS_MODEL: "gpt-oss:20b",
+    CLAUDE_CODE_ATTRIBUTION_HEADER: "0", ANTHROPIC_API_KEY: "ollama",
+  });
+});
+
+test("harness: an Anthropic-compatible gateway route keeps the gateway pins end to end", () => {
+  const route = { model: "claude-x", baseUrl: "https://gw.example.com", secretEnv: { ANTHROPIC_API_KEY: "gk" } };
+  const env = modelEnv(claudeAgentSdk.initModel(route), claudeAgentSdk.processEnv(route, host));
+  assert.equal(env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS, "1");
+  assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, "claude-x");
+  assert.equal(env.ANTHROPIC_BASE_URL, "https://gw.example.com");
+});
+
+test("harness: the Anthropic route end to end is only the base URL and the key", () => {
+  const route = { model: "claude-opus-5-5", baseUrl: "https://api.anthropic.com", secretEnv: { ANTHROPIC_API_KEY: "sk" } };
+  assert.deepEqual(modelEnv(claudeAgentSdk.initModel(route), claudeAgentSdk.processEnv(route, host)),
+    { ANTHROPIC_BASE_URL: "https://api.anthropic.com", ANTHROPIC_API_KEY: "sk" });
+});

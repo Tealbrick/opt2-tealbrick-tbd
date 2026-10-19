@@ -25,6 +25,20 @@ final class HelperLogRedactionTests: XCTestCase {
         let out = TBDHelperLog.redact(line)
         XCTAssertFalse(out.contains(key), "key kept in: \(out)")
         XCTAssertFalse(out.contains(String(key.prefix(16))), "key prefix kept in: \(out)")
+        XCTAssertFalse(out.contains(String(key.suffix(16))), "key suffix kept in: \(out)")
+      }
+    }
+  }
+
+  /// A key that crosses the 600-character cut leaves no fragment (redact first, then truncate).
+  func testAKeyAcrossTheCutLeavesNoFragment() {
+    for key in keys {
+      for offset in [5, 16, 31] {
+        let prefix = "[helper:error] " + String(repeating: "x ", count: (600 - 15 - offset) / 2)
+        let out = TBDHelperLog.redact(prefix + key + " tail")
+        XCTAssertLessThanOrEqual(out.count, 600)
+        let visible = String(key.prefix(max(0, 600 - prefix.count)))
+        if visible.count >= 6 { XCTAssertFalse(out.contains(visible), "fragment kept: …\(out.suffix(40))") }
       }
     }
   }

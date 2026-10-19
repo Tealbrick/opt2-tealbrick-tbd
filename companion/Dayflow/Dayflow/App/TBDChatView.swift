@@ -74,7 +74,9 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       // Read-only: agent directory (TBD agent) and the verified update feed for the native updater.
       "listAgents", "checkUpdate",
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
-      "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect"]
+      "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect",
+      // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
+      "restartAgent"]
     guard allowed.contains(channel) else { throw failure("Unsupported account operation") }
     start()
     guard ready || process?.isRunning == true else { throw failure(status) }
@@ -418,12 +420,15 @@ final class TBDHelperLog: @unchecked Sendable {
     (#"(?=[A-Za-z0-9+/_=-]*\d)(?=[A-Za-z0-9+/_=-]*[A-Za-z])[A-Za-z0-9+_=-][A-Za-z0-9+/_=-]{31,}"#, "[redacted]"),
   ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 
+  /// Redacts first, then truncates: a key that crosses the 600-character cut would otherwise leave a fragment too short
+  /// for the patterns (review dev.10 #8e). The 4000-character input cap only bounds the work; anything cut there is
+  /// beyond what is kept.
   static func redact(_ text: String) -> String {
-    var out = String(text.prefix(600))
+    var out = String(text.prefix(4000))
     for (pattern, template) in redactions {
       out = pattern.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: template)
     }
-    return out
+    return String(out.prefix(600))
   }
   /// One stderr line from the helper; kept only when it describes an error.
   func record(_ line: Data) {
