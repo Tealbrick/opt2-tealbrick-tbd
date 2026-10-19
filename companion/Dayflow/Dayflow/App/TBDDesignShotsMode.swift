@@ -101,6 +101,8 @@
       let seeded = DemoSeed.seed()
       let flow = FlowShotsSeed.planner()
       let flowBoard = FlowShotsSeed.taskBoardPlanner()
+      let flowDay = FlowShotsSeed.planVsActualPlanner()
+      let flowDayModel = FlowDayModel(planner: flowDay, modelSource: { "by TBD (model on this Mac)" })
       let observerShots = FlowShotsSeed.observerScreens()
       defer { observerShots.cleanUp() }
       // Creates the Listening context on the demo root (no start: no capture, hotkeys, downloads), so Settings → Listen
@@ -155,6 +157,14 @@
           )
           .padding(TBDKit.s8).background(TBDColor.tile),
           size: CGSize(width: 900, height: 560), dark: dark, name: "flow-add-from-taskboard-\(theme)")
+        // Flow (F5): Today with the strip, the minutes on each row and the Off plan card; and the Plan vs actual tab (cards,
+        // labels, where each label came from). The "This was…" menus are system menus: they are covered by unit tests.
+        try render(
+          FlowView(planner: flowDay, tab: .today, showsTasklistImport: false, dayModel: flowDayModel).background(TBDColor.tile),
+          size: main, dark: dark, name: "flow-today-planvsactual-\(theme)")
+        try render(
+          FlowView(planner: flowDay, tab: .planVsActual, showsTasklistImport: false, dayModel: flowDayModel).background(TBDColor.tile),
+          size: CGSize(width: 1280, height: 900), dark: dark, name: "flow-plan-vs-actual-\(theme)")
         // The Observer tab (F3): text on this Mac (the mockup), a local vision model that is not downloaded yet, a cloud model.
         for screen in observerShots.screens {
           try render(
@@ -336,6 +346,61 @@
           TBDFlowTaskBoardIssue(id: "iss_penpot", title: "Answer the Penpot licence question", project: "Ops", status: .todo, priority: "low", ready: true),
         ])
       let planner = FlowPlanner(store: store, now: { clock.date }, taskBoard: source, cardsForDay: { _ in [] })
+      planner.load()
+      return planner
+    }
+
+    /// F5: Task Board plan with Companion's cards of the morning (mockups "today-taskboard" and "plan-vs-actual"): model, rule
+    /// and person labels, an idle break, and a few finished timeboxes. A seeded source and seeded cards: no helper call, no
+    /// database, no Keychain, no model call. The clock stands at 11:50.
+    static func planVsActualPlanner() -> FlowPlanner {
+      let calendar = Calendar.current
+      let base = calendar.startOfDay(for: Date())
+      func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
+        calendar.date(bySettingHour: hour, minute: minute, second: second, of: base) ?? base
+      }
+      let clock = Clock(at(11, 12))
+      let url = TBDIdentity.applicationSupport("FlowShotsPlanVsActual").appendingPathComponent("flow.json")
+      let store = TBDFlowStore(url: url, clock: { clock.date })
+      let day = TBDFlowDay.string(from: base, calendar: calendar)
+      do {
+        let release = try store.addTask(
+          title: "Release TBD dev.13", day: day, startAt: at(8, 30), endAt: at(9, 40), source: .taskBoard, taskBoardID: "iss_release",
+          taskBoardProject: "TBD")
+        try store.setStatus(id: release.id, .done)
+        try store.addTask(
+          title: "Flow mockups for Martin", day: day, startAt: at(9, 40), endAt: at(11, 30), source: .taskBoard, taskBoardID: "iss_flow",
+          taskBoardProject: "TBD")
+        try store.addTask(
+          title: "Reply to Eyal about the design review", day: day, startAt: at(11, 30), endAt: at(11, 45), source: .taskBoard,
+          taskBoardID: "iss_reply", taskBoardProject: "Ops")
+        try store.addTask(title: "Weekly review", day: day, startAt: at(16, 0), endAt: at(16, 30))
+        // Model labels (cards 1, 2, 5), a person's correction (card 4), the rest by the rules (cards 3 and 6).
+        try store.setCardLabel(cardID: "101", label: .onPlan, taskID: release.id, by: .model, at: at(9, 40))
+        try store.setCardLabel(cardID: "102", label: .offPlan, by: .model, at: at(10, 5))
+        try store.setCardLabel(cardID: "104", label: .rest, by: .person, at: at(11, 5))
+        try store.setCardLabel(cardID: "105", label: .offPlan, by: .model, at: at(11, 35))
+      } catch {
+        print("tbd design shots: flow plan vs actual seed failed: \(error)")
+      }
+      clock.date = at(11, 50)
+      func card(_ id: Int64, _ start: String, _ end: String, _ title: String, apps: String, category: String = "Work") -> TimelineCard {
+        TimelineCard(
+          recordId: id, batchId: 1, startTimestamp: start, endTimestamp: end, category: category, subcategory: "", title: title,
+          summary: "", detailedSummary: "", day: day, distractions: nil, videoSummaryURL: nil, otherVideoSummaryURLs: nil,
+          appSites: AppSites(primary: apps.components(separatedBy: ", ").first, secondary: apps.components(separatedBy: ", ").dropFirst().first))
+      }
+      let cards = [
+        card(101, "8:30 AM", "9:35 AM", "TBD dev.13 release and notarization", apps: "Terminal, Xcode"),
+        card(102, "9:35 AM", "10:00 AM", "Inbox and Portal review", apps: "Mail, Portal"),
+        card(103, "10:00 AM", "10:45 AM", "Flow design notes and v1 source reading", apps: "Zed, Terminal"),
+        card(104, "10:45 AM", "11:00 AM", "Coffee, away from the Mac", apps: "Idle", category: "Idle"),
+        card(105, "11:00 AM", "11:30 AM", "News and social", apps: "Safari"),
+        card(106, "11:30 AM", "11:41 AM", "Reply to Eyal about the design review", apps: "Mail"),
+      ]
+      let source = FlowTaskBoardSource()
+      source.seed(mode: .taskBoard, issues: [])
+      let planner = FlowPlanner(store: store, now: { clock.date }, taskBoard: source, cardsForDay: { _ in cards })
       planner.load()
       return planner
     }

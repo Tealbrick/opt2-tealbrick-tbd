@@ -265,7 +265,8 @@ final class FlowTaskBoardTests: FlowTestCase {
   func testCompleteOnTapWritesOneCallWithTheMinutesAndThenTheTaskIsDone() async throws {
     let store = makeStore()
     let board = try boardTask(store)
-    // 45 minutes of timeline that the person put on this task.
+    // 45 minutes of timeline that the person put on this task. The card has ended (F5 counts finished cards only).
+    clock.set("2026-10-05T10:00:00Z")
     let card = TimelineCard(
       recordId: 101, batchId: 1, startTimestamp: "9:00 AM", endTimestamp: "9:45 AM", category: "Work", subcategory: "", title: "Reply",
       summary: "", detailedSummary: "", day: day, distractions: nil, videoSummaryURL: nil, otherVideoSummaryURLs: nil, appSites: nil)

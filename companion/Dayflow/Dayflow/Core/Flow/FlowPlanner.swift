@@ -43,6 +43,8 @@ final class FlowPlanner: ObservableObject {
   @Published var notice: String?
   /// Task id → what its "Mark done on Task Board" tap is doing (F4). Absent = nothing running.
   @Published private(set) var taskBoardRows: [String: FlowTaskBoardRowState] = [:]
+  /// cardID → label (the model's, the person's), mirrored from the store once a second (F5).
+  @Published private(set) var cardLabels: [String: TBDFlowCardLabel] = [:]
 
   /// Where the list comes from (F4): Task Board when licensed, connected and granted, else this Mac.
   let taskBoard: FlowTaskBoardSource
@@ -128,6 +130,7 @@ final class FlowPlanner: ObservableObject {
     if tasks != state.tasks { tasks = state.tasks }
     if focus != state.focus { focus = state.focus }
     if settings != state.settings { settings = state.settings }
+    if cardLabels != state.cardLabels { cardLabels = state.cardLabels }
     let pending = store.pendingReminders(now: current)
     if reminders != pending { reminders = pending }
     clock = current
@@ -243,14 +246,12 @@ final class FlowPlanner: ObservableObject {
 
   // MARK: - Task Board (F4)
 
-  /// Minutes the timeline put on this task today (effective labels: person > model > rule). 0 is allowed.
+  /// Minutes the timeline put on this task today (effective labels: person > model > rule). 0 is allowed. The same numbers
+  /// as the Flow page (`FlowDayModel.snapshot`).
   func minutesOnPlan(for task: TBDFlowTask) -> Int {
-    let current = now()
-    let day = FlowCardLabeller.companionDay(current, calendar: calendar)
-    let plan = tasks.filter { $0.day == task.day && $0.status != .cancelled }
-    let cards = cardsForDay(day).compactMap { FlowCardLabeller.evidence(for: $0, calendar: calendar) }
-    let minutes = TBDFlowMatcher.minutesPerTask(labels: store.cardLabels, cards: cards, tasks: plan)[task.id] ?? 0
-    return Int(minutes.rounded())
+    let plan = planTasks(forDay: task.day)
+    let snapshot = FlowDayModel.snapshot(cards: timelineEvidence(), tasks: plan, labels: store.cardLabels, now: now())
+    return Int((snapshot.minutesPerTask[task.id] ?? 0).rounded())
   }
 
   /// The person tapped "Mark done on Task Board" (after the inline confirm). Writes ONE call through TBD's agent; on
@@ -365,6 +366,36 @@ final class FlowPlanner: ObservableObject {
     let result = try TBDTasklistImport.importOpenTasks(into: store, now: now(), calendar: calendar)
     refresh()
     return result
+  }
+
+  // MARK: - Plan vs actual (F5)
+
+  /// The planner's real now (the clock property moves once a second).
+  var currentTime: Date { now() }
+
+  /// The tasks of `day` that are not cancelled, in plan order (by start).
+  func planTasks(forDay day: String) -> [TBDFlowTask] {
+    store.state.tasks.filter { $0.day == day && $0.status != .cancelled }
+      .sorted { ($0.startAt ?? .distantPast) < ($1.startAt ?? .distantPast) }
+  }
+
+  /// Companion's timeline cards of today's Companion day, as the matcher reads them (stable id = the record id).
+  func timelineEvidence() -> [TBDFlowCardEvidence] {
+    let day = FlowCardLabeller.companionDay(now(), calendar: calendar)
+    return cardsForDay(day).compactMap { FlowCardLabeller.evidence(for: $0, calendar: calendar) }
+  }
+
+  /// The person says what a card was. Stored with `by: .person` (it wins over the model and the rules). `note` goes to the
+  /// observer as a queued line ("The person says 9:35 AM – 10:00 AM was off plan."); nil sends nothing.
+  func correctCard(_ cardID: String, label: TBDFlowLabel, taskID: String?, note: String?) {
+    let stored = run { _ = try store.setCardLabel(cardID: cardID, label: label, taskID: taskID, by: .person, at: now()) }
+    if stored, let note { mirror.observer.noteUserEvent(note, markRefocused: false) }
+  }
+
+  /// "Clear my correction": removes the person's label only. A model or rule label stays.
+  func clearCardCorrection(_ cardID: String) {
+    guard store.cardLabels[cardID]?.by == .person else { return }
+    run { try store.clearCardLabel(cardID: cardID) }
   }
 
   // MARK: - Day helpers

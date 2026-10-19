@@ -11,6 +11,8 @@ import TBDModels
 
 struct FlowTodayView: View {
   @ObservedObject var planner: FlowPlanner
+  /// Plan vs actual from Companion's timeline (F5).
+  @ObservedObject var dayModel: FlowDayModel
   let showsTasklistImport: Bool
 
   @State private var showPaste = false
@@ -32,16 +34,17 @@ struct FlowTodayView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: TBDKit.s5) {
       sourceNotice
+      if !plan.isEmpty { FlowDayStripCard(model: dayModel) }
       ForEach(planner.reminders) { reminderRow($0) }
       ViewThatFits(in: .horizontal) {
         HStack(alignment: .top, spacing: TBDKit.s6) {
           planColumn.frame(maxWidth: .infinity, alignment: .leading)
-          nowCard.frame(width: 340)
+          rightColumn.frame(width: 340)
         }
         .frame(minWidth: 760)
         VStack(alignment: .leading, spacing: TBDKit.s5) {
           planColumn
-          nowCard
+          rightColumn
         }
       }
     }
@@ -194,14 +197,26 @@ struct FlowTodayView: View {
           }
         }
         Spacer(minLength: 0)
-        if task.durationMinutes > 0 {
-          Text(Self.duration(task.durationMinutes)).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted)
-        }
+        rowTrailing(task, done: done)
       }
       .padding(.vertical, TBDKit.s3).padding(.horizontal, TBDKit.s4)
       .background(isNow ? TBDColor.tealWash : Color.clear, in: TBDBrickShape())
       taskBoardExtras(task)
       Rectangle().fill(TBDColor.line).frame(height: TBDKit.hair)
+    }
+  }
+
+  /// The right side of a plan row: the minutes the timeline put on the task, or "not started". A break row keeps its length.
+  @ViewBuilder
+  private func rowTrailing(_ task: TBDFlowTask, done: Bool) -> some View {
+    if TBDFlowSession.isBreak(task) {
+      if task.durationMinutes > 0 {
+        Text(Self.duration(task.durationMinutes)).font(TBDTokens.Typography.label).foregroundStyle(TBDColor.muted)
+      }
+    } else {
+      let minutes = Int((dayModel.snapshot.minutesPerTask[task.id] ?? 0).rounded())
+      Text(minutes > 0 || done ? "\(FlowDayModel.minutesText(Double(minutes))) on plan" : "not started")
+        .font(TBDTokens.Typography.label).foregroundStyle(TBDColor.inkSoft)
     }
   }
 
@@ -250,6 +265,16 @@ struct FlowTodayView: View {
   private static func isFailure(_ state: FlowTaskBoardRowState) -> Bool {
     if case .failed = state { return true }
     return false
+  }
+
+  // MARK: Right column
+
+  /// The Now card and, when today has tasks, the "Off plan today" card.
+  private var rightColumn: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s5) {
+      nowCard
+      if !plan.isEmpty { FlowOffPlanCard(model: dayModel) }
+    }
   }
 
   // MARK: Now card

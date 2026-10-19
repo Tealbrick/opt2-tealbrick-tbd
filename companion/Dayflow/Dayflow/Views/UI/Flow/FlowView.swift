@@ -3,8 +3,8 @@
 //  TBD
 //
 //  The Flow page: today's plan on this Mac, the observer and the nudge preview. Layout follows the approved mockup
-//  (coordination/leads/tbd/flow-mockups-20261019, "today-local"). The Observer tab is `FlowObserverView` (slice F3); the
-//  plan-vs-actual strip is F5 and the Task Board source is F4.
+//  (coordination/leads/tbd/flow-mockups-20261019, "today-local"). The Observer tab is `FlowObserverView` (slice F3), the
+//  Task Board source is F4, and plan vs actual from Companion's timeline (the strip and its tab) is F5.
 //
 
 import SwiftUI
@@ -12,11 +12,12 @@ import TBDDesign
 import TBDModels
 
 enum FlowTab: String, CaseIterable {
-  case today, observer, nudge
+  case today, planVsActual, observer, nudge
 
   var title: String {
     switch self {
     case .today: return "Today"
+    case .planVsActual: return "Plan vs actual"
     case .observer: return "Observer"
     case .nudge: return "Nudge preview"
     }
@@ -28,16 +29,18 @@ struct FlowView: View {
   @ObservedObject private var mirror = FlowSessionMirror.shared
   @ObservedObject private var observer: FlowDistractionAgent
   @StateObject private var observerModel: FlowObserverModel
+  @StateObject private var dayModel: FlowDayModel
   @State private var tab: FlowTab
   private let showsTasklistImport: Bool
 
   init(
     planner: FlowPlanner = .shared, tab: FlowTab = .today, showsTasklistImport: Bool = TBDTasklistImport.isAvailable,
-    observer: FlowDistractionAgent = .shared, observerModel: FlowObserverModel? = nil
+    observer: FlowDistractionAgent = .shared, observerModel: FlowObserverModel? = nil, dayModel: FlowDayModel? = nil
   ) {
     self.planner = planner
     self.observer = observer
     _observerModel = StateObject(wrappedValue: observerModel ?? FlowObserverModel())
+    _dayModel = StateObject(wrappedValue: dayModel ?? FlowDayModel(planner: planner))
     _tab = State(initialValue: tab)
     self.showsTasklistImport = showsTasklistImport
   }
@@ -49,7 +52,9 @@ struct FlowView: View {
         TBDSegmented(selection: $tab, options: FlowTab.allCases.map { ($0, $0.title) })
         switch tab {
         case .today:
-          FlowTodayView(planner: planner, showsTasklistImport: showsTasklistImport)
+          FlowTodayView(planner: planner, dayModel: dayModel, showsTasklistImport: showsTasklistImport)
+        case .planVsActual:
+          FlowPlanVsActualView(model: dayModel)
         case .observer:
           FlowObserverView(observer: observer, model: observerModel)
         case .nudge:
@@ -59,13 +64,16 @@ struct FlowView: View {
       .padding(TBDKit.s8)
       .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    // F5: read Companion's timeline when the page opens, every minute while it is visible, and when the plan or a label changes.
+    .onAppear { dayModel.start() }
+    .onDisappear { dayModel.stop() }
   }
 
   // MARK: Header
 
   private var headerLabel: String {
     switch tab {
-    case .today: return "Companion · Today's plan · " + Self.dayLabel(planner.clock)
+    case .today, .planVsActual: return "Companion · Today's plan · " + Self.dayLabel(planner.clock)
     case .observer: return "Companion · Observer"
     case .nudge: return "Companion · Nudge preview"
     }
