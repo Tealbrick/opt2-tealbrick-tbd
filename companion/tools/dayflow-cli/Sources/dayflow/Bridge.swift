@@ -18,13 +18,11 @@ enum AgentBridge {
   static let protocolVersion = 1
 
   static var socketPath: String {
-    let appSupport = FileManager.default.urls(
-      for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return appSupport.appendingPathComponent(tbdAppDataFolder + "/Companion/agent.sock").path
+    tbdDataDirectory().appendingPathComponent("Companion/agent.sock").path
   }
 
   static var editsEnabled: Bool {
-    UserDefaults(suiteName: tbdAppDefaultsDomain)?
+    UserDefaults(suiteName: tbdDefaultsDomain())?
       .bool(forKey: "agentEditsEnabled") ?? false
   }
 

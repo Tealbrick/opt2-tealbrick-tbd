@@ -12,6 +12,7 @@ import { createRequestIds } from "./requestIds";
 import type { ContentBlock } from "../shared/message";
 import { listeningServer } from "./listeningTools";
 import { modelEnv } from "./modelEnv";
+import { companionEnv } from "./companionEnv";
 
 /**
  * TBD's default agent process (C24): the Claude Agent SDK harness with the
@@ -43,7 +44,7 @@ const ids = createRequestIds();
 /** Harness-local tool servers (C5); the bridge relay is added by harness-claude. */
 function localServers(c: AgentConfig): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
-  if (c.companionCli) servers.companion = { type: "stdio", command: c.companionCli, args: ["mcp"], env: { HOME: process.env.HOME ?? "" } };
+  if (c.companionCli) servers.companion = { type: "stdio", command: c.companionCli, args: ["mcp"], env: companionEnv(c) };
   if (c.listeningCli) servers.listening = listeningServer(c.listeningCli);
   return servers;
 }

@@ -299,3 +299,78 @@ test("C7: TBD quit overnight (20 h) and started again: the loaded session is use
   assert.ok(core.idleExpiresAt(token) > w.now() + 23 * HOUR, "and the window is 24 h again");
   keepAlive.stop();
 });
+
+// ---- dev.17 review S6: the keep-alive at helper start, with a stored session and no call from the window --------------------------
+
+/**
+ * A relaunch: the Keychain holds the session (`stored`), the helper has not loaded it into memory yet, and nothing in the window
+ * has called yet. services.ts wires `prepare` = getServices() + ensurePerson() (one memoised load), so the loop sees the session
+ * at its first check.
+ */
+function relaunch(opts: { prepare: boolean; loadFails?: boolean }) {
+  const w = world();
+  const core = fakeCore(w);
+  const token = "tbo_test_token_not_real";
+  core.issue(token); // Core still has the session
+  const stored: PersonSession = { token, sessionId: "osn_1", expiresAt: w.now() + DAY, email: "qa@example.test" };
+  const store = memoryStore(); // memory is empty at launch
+  let keychainReads = 0;
+  const ensurePerson = async () => {
+    keychainReads += 1;
+    if (opts.loadFails) throw new Error("Sign-in access was not confirmed.");
+    store.save(stored);
+  };
+  const portal = createPortal({ origin: "http://core.test", store, machineLabel: "m", fetch: core.fetch, now: w.now });
+  const logs: string[] = [];
+  const keepAlive = createSessionKeepAlive({
+    ...(opts.prepare ? { prepare: ensurePerson } : {}),
+    signedIn: () => Boolean(portal.session()),
+    touch: () => portal.me(),
+    now: w.now, setTimer: w.setTimer, clearTimer: w.clearTimer, log: (l) => logs.push(l),
+  });
+  return { w, core, store, keepAlive, logs, reads: () => keychainReads };
+}
+
+test("S6: helper start with a stored session and no window call -> one keep-alive call within the first minute", async () => {
+  const { w, core, keepAlive, reads } = relaunch({ prepare: true });
+  keepAlive.start();
+  await w.advance(MIN);
+  assert.equal(core.count(), 1, "one GET /me within the first minute");
+  assert.deepEqual(core.requests.map((r) => `${r.method} ${r.path}`), ["GET /me"]);
+  assert.equal(reads(), 1, "the session was loaded once, by the one load the window's first call would also use");
+  await w.advance(KEEPALIVE_INTERVAL_MS - 2 * MIN);
+  assert.equal(core.count(), 1, "then one per interval, not more");
+  keepAlive.stop();
+});
+
+test("S6 negative control: without the load at start the same relaunch makes no call (the gap this closes)", async () => {
+  const { w, core, keepAlive } = relaunch({ prepare: false });
+  keepAlive.start();
+  await w.advance(5 * MIN);
+  assert.equal(core.count(), 0, "memory is empty until some call loads the session");
+  keepAlive.stop();
+});
+
+test("S6: a load that fails (the person did not confirm) is logged without a secret, makes no call, and the loop still runs", async () => {
+  const { w, core, keepAlive, logs } = relaunch({ prepare: true, loadFails: true });
+  keepAlive.start();
+  await w.advance(5 * MIN);
+  assert.equal(core.count(), 0);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /could not load the session \(Error\)/);
+  assert.doesNotMatch(logs[0], /tbo_|confirmed/, "no token and no message text");
+  keepAlive.stop();
+});
+
+test("S6: stop() before the load ends starts no loop", async () => {
+  const w = world();
+  let release: () => void = () => {};
+  const slow = new Promise<void>((r) => { release = r; });
+  let calls = 0;
+  const keepAlive = createSessionKeepAlive({ prepare: () => slow, signedIn: () => true, touch: async () => { calls += 1; }, now: w.now, setTimer: w.setTimer, clearTimer: w.clearTimer });
+  keepAlive.start();
+  keepAlive.stop();
+  release();
+  await w.advance(5 * MIN);
+  assert.equal(calls, 0);
+});

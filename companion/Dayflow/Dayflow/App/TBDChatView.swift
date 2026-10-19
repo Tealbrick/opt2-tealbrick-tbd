@@ -181,10 +181,10 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     }
     #if DEBUG
       if TBDIdentity.isDev {
-        // TBD Dev: TBD_CHAT_DATA and the agent workspace above are already under <dataFolder>-dev. The bundled CLIs
-        // are release builds that read the live app's data, so the dev helper gets none. The helper's file policy keeps
-        // denying the live folder.
-        env["TBD_COMPANION_CLI"] = nil
+        // TBD Dev: TBD_CHAT_DATA and the agent workspace above are already under <dataFolder>-dev. The Companion CLI follows
+        // TBD_APP_SUPPORT_DIR, which the helper passes to it from TBD_CHAT_DATA (dev.17 review S8), so TBD Dev's agent reads and
+        // writes the -dev folder and never the live one. The Listening CLI has no such switch yet, so the dev helper gets none.
+        // The helper's file policy keeps denying the live folder.
         env["TBD_LISTENING_CLI"] = nil
       }
     #endif

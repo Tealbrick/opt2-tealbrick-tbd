@@ -46,7 +46,7 @@ test("a local card of a replaced process closes as denied; its late Approve cann
     const turnA = h.agent.sendTurn({ text: "local", onDelta: () => {}, onActivity: () => {} }).catch((e: Error) => e.message);
     while (h.cards().length < 1) await sleep(10);
     const cardA = h.cards()[0];
-    assert.equal(cardA.local?.text, "npm test", "the local card shows the exact command");
+    assert.equal(cardA.local?.text, "git status", "the local card shows the exact command");
     assert.equal(cardA.local?.alwaysOffered, true);
 
     await h.agent.restart();
@@ -93,7 +93,7 @@ test("the card's own process gets its answer, and Always allow is remembered for
     answerAsk(h.cards()[0].id, true, true);
     const result = await turn;
     assert.deepEqual(JSON.parse(result.reply), { allow: true, remember: "always" });
-    assert.deepEqual(h.store.list().map((r) => [r.key, r.decision]), [["shell:npm test", "always"]]);
+    assert.deepEqual(h.store.list().map((r) => [r.key, r.decision]), [["shell:git status", "always"]]);
     // the next turn needs no card
     const again = await h.agent.sendTurn({ text: "local", onDelta: () => {}, onActivity: () => {} });
     assert.deepEqual(JSON.parse(again.reply), { allow: true, remember: "always" });

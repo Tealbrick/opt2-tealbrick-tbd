@@ -313,4 +313,123 @@ final class FlowPlanToolsTests: XCTestCase {
   func testUnknownToolIsAnError() {
     XCTAssertTrue(call("flow_plan_delete", [:]).isError)
   }
+
+  // MARK: dev.17 review
+
+  private var folderNames: [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: flowURL.deletingLastPathComponent().path)) ?? []).sorted()
+  }
+
+  /// A store that only reads until the first change: what the MCP server uses.
+  private func makeReadOnlyStore() -> TBDFlowStore { TBDFlowStore(url: flowURL, quarantine: .onFirstWrite) }
+
+  // S5: a plan replays only while one of its tasks exists.
+  func testASavedPlanIsNewAgainWhenThePersonRemovedAllItsLines() throws {
+    let first = add("TODO One\nTODO Two", extra: ["idempotency_key": "plan-1"])
+    XCTAssertEqual(first.payload["saved"] as? Bool, true)
+    let ids = first.payload["task_ids"] as? [String] ?? []
+    XCTAssertEqual(ids.count, 2)
+    let again = add("TODO One\nTODO Two", extra: ["idempotency_key": "plan-1"])
+    XCTAssertEqual(again.payload["replayed"] as? Bool, true, "the lines are still there: a replay")
+    let store = makeStore()
+    try store.deleteTask(id: ids[0])
+    XCTAssertEqual(add("TODO One\nTODO Two", extra: ["idempotency_key": "plan-1"]).payload["replayed"] as? Bool, true, "one line is left: still a replay")
+    XCTAssertEqual(makeStore().state.tasks.count, 1)
+    try makeStore().deleteTask(id: ids[1])
+    XCTAssertTrue(makeStore().state.tasks.isEmpty)
+    let fresh = add("TODO One\nTODO Two", extra: ["idempotency_key": "plan-1"])
+    XCTAssertEqual(fresh.payload["saved"] as? Bool, true, "all lines gone: the same plan is saved again")
+    XCTAssertEqual(fresh.payload["replayed"] as? Bool, false)
+    let newIDs = fresh.payload["task_ids"] as? [String] ?? []
+    XCTAssertEqual(newIDs.count, 2)
+    XCTAssertTrue(Set(newIDs).isDisjoint(with: ids), "new ids")
+    XCTAssertEqual(makeStore().state.tasks.count, 2)
+  }
+
+  // Nits: the read tools do not write anything, not even a lock file or a moved file.
+  func testTodayAndPreviewMakeNoLockFileAndMoveNoUnreadableFile() throws {
+    try FileManager.default.createDirectory(at: flowURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("not json".utf8).write(to: flowURL)
+    let store = makeReadOnlyStore()
+    let today = call("flow_plan_today", [:], store: store)
+    XCTAssertFalse(today.isError)
+    XCTAssertEqual(today.payload["count"] as? Int, 0)
+    XCTAssertTrue((today.payload["warning"] as? String ?? "").contains("could not read the plan file"), "the person's agent is told")
+    XCTAssertFalse((today.payload["warning"] as? String ?? "").contains("nothing can be added"), "a save would keep a copy and go on")
+    XCTAssertFalse(add("09:00-10:00 Write", mode: "preview", store: store).isError)
+    XCTAssertEqual(folderNames, ["flow.json"], "no flow.json.lock, no .corrupt copy")
+    XCTAssertEqual(try String(contentsOf: flowURL, encoding: .utf8), "not json")
+    // A save keeps a copy of the unreadable file (never deleted) and then saves.
+    let saved = add("TODO Fresh", store: store)
+    XCTAssertEqual(saved.payload["saved"] as? Bool, true)
+    XCTAssertEqual(folderNames.filter { $0.contains(".corrupt-") }.count, 1)
+    XCTAssertEqual(makeStore().state.tasks.map(\.title), ["Fresh"])
+  }
+
+  func testTodayAndPreviewOfAMissingListMakeNothingAtAll() {
+    let store = makeReadOnlyStore()
+    XCTAssertFalse(call("flow_plan_today", [:], store: store).isError)
+    XCTAssertFalse(add("TODO x", mode: "preview", store: store).isError)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: flowURL.deletingLastPathComponent().path), "not even the folder")
+  }
+
+  // L70: the sentence is surfaced by the MCP tool.
+  private func realDataStore(_ context: TBDRealDataGuard.Context) -> (store: TBDFlowStore, url: URL) {
+    let home = folder.appendingPathComponent("RealHome", isDirectory: true)
+    try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let url = home.appendingPathComponent("Library/Application Support/com.tealbrick.desktop/Companion/flow.json")
+    var ctx = context
+    ctx.realHome = home.path
+    return (TBDFlowStore(url: url, quarantine: .onFirstWrite, realDataGuard: ctx), url)
+  }
+
+  func testASaveIntoTheRealDataFromATestOrToolRunIsRefusedAndTheToolShowsTheSentence() {
+    let sentence = "TBD refused to write to your real TBD data from a test or tool run. Set CFFIXED_USER_HOME to a test folder."
+    let conditions: [(String, TBDRealDataGuard.Context)] = [
+      ("TBD_TEST=1", .init(realHome: "", environment: ["TBD_TEST": "1"], executablePath: "/Applications/TBD.app/Contents/Helpers/dayflow", underXCTest: false)),
+      ("XCTest", .init(realHome: "", environment: [:], executablePath: "/Applications/TBD.app/Contents/Helpers/dayflow", underXCTest: true)),
+      ("a tool outside the bundle", .init(realHome: "", environment: [:], executablePath: "/Users/x/work/.build/debug/dayflow", underXCTest: false)),
+    ]
+    for (label, context) in conditions {
+      let (store, url) = realDataStore(context)
+      let saved = call(FlowPlanTools.addTool, ["text": "TODO Nope", "mode": "save"], store: store)
+      XCTAssertTrue(saved.isError, label)
+      XCTAssertEqual(saved.payload["error"] as? String, sentence, "\(label): the sentence, as it is")
+      XCTAssertFalse(FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), "\(label): nothing was made")
+      // preview and today are reads: they still work
+      XCTAssertFalse(call(FlowPlanTools.addTool, ["text": "TODO Nope", "mode": "preview"], store: store).isError, label)
+      XCTAssertFalse(call(FlowPlanTools.todayTool, [:], store: store).isError, label)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), label)
+    }
+  }
+
+  func testTheAppsAgentCLIFromTheBundleMayStillSave() throws {
+    let (store, url) = realDataStore(.init(realHome: "", environment: ["TBD_APP_SUPPORT_DIR": "/x"], executablePath: "/Applications/TBD.app/Contents/Helpers/dayflow", underXCTest: false))
+    let saved = call(FlowPlanTools.addTool, ["text": "TODO Fine", "mode": "save"], store: store)
+    XCTAssertFalse(saved.isError, "\(saved.payload)")
+    XCTAssertEqual(saved.payload["saved"] as? Bool, true)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+  }
+
+  // S8: the CLI takes the data folder from TBD_APP_SUPPORT_DIR (the mapping lives in TBDIdentity, shared with the app).
+  func testTheCLIUsesTheEnvironmentFolderForItsFilesInsteadOfItsCompiledDefault() throws {
+    let dev = "/Users/x/Library/Application Support/com.tealbrick.desktop-dev"
+    let live = "/Users/x/Library/Application Support/com.tealbrick.desktop"
+    XCTAssertEqual(TBDIdentity.dataDirectory(environment: ["TBD_APP_SUPPORT_DIR": dev]).path, dev)
+    XCTAssertEqual(TBDIdentity.dataDirectory(environment: ["TBD_APP_SUPPORT_DIR": live]).path, live)
+    XCTAssertEqual(TBDIdentity.dataDirectory(environment: ["TBD_APP_SUPPORT_DIR": dev]).appendingPathComponent("Companion/flow.json").path, dev + "/Companion/flow.json")
+    XCTAssertEqual(TBDIdentity.dataDirectory(environment: ["TBD_APP_SUPPORT_DIR": "relative"]).lastPathComponent, TBDIdentity.dataFolder, "a relative value is ignored")
+    XCTAssertEqual(TBDIdentity.defaultsDomain(forDataDirectory: URL(fileURLWithPath: dev)), "com.tealbrick.desktop.dev")
+    // The CLI's own files (socket, database, telemetry queue, settings domain) all come from that one mapping.
+    let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Sources/dayflow")
+    for (file, needle) in [("Bridge.swift", "tbdDataDirectory().appendingPathComponent(\"Companion/agent.sock\")"), ("Database.swift", "tbdDataDirectory().appendingPathComponent(\"Companion/chunks.sqlite\")"),
+                           ("AgentUsageTelemetry.swift", "tbdDataDirectory().appendingPathComponent(\"Companion\""), ("Categories.swift", "tbdDefaultsDomain()"), ("Bridge.swift", "tbdDefaultsDomain()")] {
+      let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+      XCTAssertTrue(text.contains(needle), "\(file) must use the environment folder: \(needle)")
+    }
+    for file in ["Bridge.swift", "Database.swift", "AgentUsageTelemetry.swift", "Categories.swift"] {
+      let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+      XCTAssertFalse(text.contains("tbdAppDataFolder"), "\(file) must not build the folder from the compiled default")
+    }
+  }
 }

@@ -75,10 +75,28 @@ public enum TBDIdentity {
     /// A Keychain service under the app's own bundle id: `keychainService("models")` = `com.tealbrick.desktop.models`.
     public static func keychainService(_ name: String) -> String { service(liveBundleID + "." + name) }
 
-    /// `~/Library/Application Support/<dataFolder>` (or a sub-folder of it).
-    public static func applicationSupport(_ subfolder: String? = nil) -> URL {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// The name of the environment variable that gives a tool the app's data folder (S8, dev.17 review). TBD's agent sets it for its
+    /// Companion server, so the CLI writes where the RUNNING app (live or TBD Dev) keeps its data, not into the folder it was built for.
+    public static let appSupportEnvironmentKey = "TBD_APP_SUPPORT_DIR"
+
+    /// The app's data folder: `TBD_APP_SUPPORT_DIR` when it names an absolute path (".." and "." resolved), else
+    /// `~/Library/Application Support/<dataFolder>`. A relative or empty value is ignored.
+    public static func dataDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let raw = environment[appSupportEnvironmentKey], raw.hasPrefix("/") {
+            return URL(fileURLWithPath: raw, isDirectory: true).standardizedFileURL
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(dataFolder, isDirectory: true)
+    }
+
+    /// The UserDefaults domain of the app that owns `dataDirectory` (dev folders belong to the dev bundle id).
+    public static func defaultsDomain(forDataDirectory directory: URL) -> String {
+        directory.lastPathComponent.hasPrefix(liveDataFolder + "-dev") ? devBundleID : liveBundleID
+    }
+
+    /// `~/Library/Application Support/<dataFolder>` (or a sub-folder of it); `TBD_APP_SUPPORT_DIR` replaces the folder.
+    public static func applicationSupport(_ subfolder: String? = nil) -> URL {
+        let root = dataDirectory()
         guard let subfolder else { return root }
         return root.appendingPathComponent(subfolder, isDirectory: true)
     }

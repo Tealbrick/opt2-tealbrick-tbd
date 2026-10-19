@@ -7,7 +7,7 @@ import {
   ALWAYS_HINT, EVERY_TIME_LINE, MAX_CORRUPT_COPIES, SHELL_COMMAND_MAX, buildLocalCard, cleanLocalText, createLocalConsentStore, decideLocalCall, isLocalConsentTool,
   localConsentListing, localNeverMessage, localTarget, normaliseKey, shellAlways, webAlwaysVerdict, type LocalTarget,
 } from "../src/main/localConsent.ts";
-import { decide, writeScope, type PolicyContext } from "../src/main/filePolicy.ts";
+import { decide, realPath, writeScope, type PolicyContext } from "../src/main/filePolicy.ts";
 
 // Standing Always/Never for TBD's agent's local actions (C280 C13 local part): the shell classifier, the keys, the decision
 // order, the card and the rules file. The end-to-end injection fixture for the built agent is local-injection.test.ts.
@@ -38,15 +38,21 @@ function world() {
 }
 
 describe("shell classifier: Always allow", () => {
+  // dev.17 review B1, B2: Always is an ALLOW-LIST. Only a line made of known commands that just look at things gets it.
   const ALWAYS = [
-    "npm test", "npm run build", "ls", "ls -la", "pwd", "git status", "git diff --stat", "git log -p -3", "git add .", "git commit -m 'fix the thing'",
-    "git checkout -b feature/x", "git checkout main", "git branch", "git branch -a", "git reset HEAD~1", "git stash", "git -C /tmp/x status", "git --no-pager log",
-    "cat package.json", "cat < package.json", "grep -rn TODO src", "grep 'rm -rf' notes.txt", "echo 'rm -rf ~'", 'echo "a > b; rm c"', "echo \"it's\"",
-    "cd src && npm test", "cd src; ls", "make", "make -j4 all", "node script.ts", "node --version", "node --experimental-strip-types x.ts", "python3 -m pytest", "python3 tool.py --flag",
-    "bash scripts/build.sh", "sh ./run.sh arg", "npm test 2>&1", "npm test 2>&1 | tail -20", "cat a.txt | wc -l", "ls | head", "FOO=bar npm test", "NODE_ENV=test npm test",
-    "find . -name '*.ts'", "find src -type f | sort", "sed -n '1,5p' file.txt", "sed 's/a/b/' file.txt", "chmod +x run.sh", "defaults read com.apple.finder", "swift build", "cargo test --release",
-    "tsc --noEmit", "curl -sI https://example.com", "echo $", "ls # rm -rf /", "diff <(echo)", // the last one: process substitution -> NOT always, see below
-  ].filter((c) => !c.includes("<(echo)"));
+    "ls", "ls -la", "ls -lah ~/proj/src", "pwd", "cat package.json", "cat < package.json", "head -n 20 README.md", "tail -n 50 build.log", "tail -f server.log", "wc -l src/a.ts",
+    "grep -rn TODO src", "grep 'rm -rf' notes.txt", "egrep -c 'a|b' f.txt", "fgrep -i hello f.txt", "rg -n fixme src", "rg --files | head", "file photo.png", "stat -f %z f.txt", "du -sh .", "df -h",
+    "date", "date +%s", "date -u +%Y-%m-%d", "which node", "whoami", "uname -a", "echo hello", "echo 'rm -rf ~'", 'echo "a > b; rm c"', "echo \"it's\"", "echo $", "printf '%s\\n' hi",
+    "env", "env -0", "sort names.txt", "sort -u names.txt", "sort -rn counts.txt", "uniq names.txt", "uniq -c names.txt", "cut -d, -f1 data.csv", "tr a-z A-Z", "diff a.txt b.txt", "diff -u a.txt b.txt", "cmp a b",
+    "basename /a/b.txt", "dirname /a/b.txt", "realpath ../x", "find . -name '*.ts'", "find src -type f | sort", "find . -maxdepth 2 -type d",
+    "git status", "git status -sb", "git diff", "git diff --stat", "git diff HEAD~1 -- src/a.ts", "git log -p -3", "git log --oneline -20", "git show HEAD", "git show HEAD:README.md",
+    "git branch", "git branch -a", "git branch -vv", "git branch --list 'feat*'", "git branch --contains abc1234", "git branch --show-current", "git rev-parse HEAD", "git rev-parse --show-toplevel", "git remote -v",
+    "git blame src/a.ts", "git ls-files", "git ls-files --others", "git grep -n TODO", "git -C /tmp/x status", "git --no-pager log",
+    "cat a.txt | wc -l", "ls | head", "ls -1 | sort | uniq -c | sort -rn", "git status && git diff --stat", "pwd; ls", "ls\npwd", "ls 2>&1", "ls # rm -rf /",
+    "/bin/ls", "/usr/bin/git status", "/usr/bin/env",
+    // --version and --help of any command (and only that one argument)
+    "git --version", "node --version", "npm --version", "python3 --version", "make --version", "curl --version", "swift --help", "tar --help", "cargo --version",
+  ];
   for (const command of ALWAYS) {
     test(`always: ${command}`, () => assert.deepEqual(shellAlways(command), { always: true }, command));
   }
@@ -74,6 +80,29 @@ describe("shell classifier: Always allow", () => {
     ["ls ‮; rm x"], ["ls \u0007"], ["ls ‏"],
     ["a".repeat(SHELL_COMMAND_MAX + 1)],
     ["diskutil eraseDisk"], ["security delete-generic-password"], ["crontab -r"], ["pmset sleepnow"], ["networksetup -setdnsservers Wi-Fi 1.1.1.1"],
+    // dev.17 review B1, B2: the allow-list (every review case)
+    ["=rm x"], ["ls =(echo hi)"], ["ls =ls"], ["ls *(e:'echo hi':)"], ["ls ?(a)"], ["ls +(a|b)"], ["ls @(a)"], ["ls !(a)"], ["ls a*(x)"],
+    ["busybox sh -c 'ls'"], ["busybox sh"], ["busybox ls"], ["xcrun sh -c ls"], ["ls | busybox sh"], ["ls | sh"], ["ls | zsh"], ["ls | fish"], ["grep sh notes.txt"], ["echo zsh"], ["echo bash"], ["cat fish"],
+    ["sandbox-exec -p '(version 1)' ls"], ["chroot / ls"], ["login -f me"], ["/bin/sh -c ls"], ["/usr/bin/xcrun swift x.swift"],
+    ["npm test"], ["npm run build"], ["npm ci"], ["npx tsc"], ["pnpm install"], ["pnpm test"], ["yarn test"], ["make"], ["make -j4 all"], ["python3 -m x"], ["python3 tool.py --flag"], ["python3 -m pytest"], ["python x.py"],
+    ["node script.ts"], ["node --require ./x.js app.js"], ["node --experimental-strip-types x.ts"], ["ruby x.rb"], ["perl x.pl"], ["swift build"], ["swift test"], ["cargo test --release"], ["cargo build"], ["go test ./..."], ["tsc --noEmit"],
+    ["deno run x.ts"], ["bun test"], ["php x.php"], ["mvn test"], ["gradle build"], ["cmake ."], ["xcodebuild test"], ["bash scripts/build.sh"], ["sh ./run.sh arg"], ["zsh x.sh"],
+    ["npm test 2>&1"], ["npm test 2>&1 | tail -20"], ["FOO=bar npm test"], ["NODE_ENV=test npm test"], ["FOO=bar ls"], ["FOO=1 git status"], ["cd src && npm test"], ["cd src; ls"], ["cd src"],
+    ["curl -o f https://example.com/x"], ["curl -o f"], ["curl http://127.0.0.1:8080/"], ["curl -sI https://example.com"], ["wget https://example.com/x"], ["scp a host:b"], ["sftp host"], ["nc -l 8080"], ["ssh host"], ["rsync -a a b"],
+    ["git config core.sshCommand evil"], ["git config user.name x"], ["git pull"], ["git fetch"], ["git fetch origin"], ["git clone https://example.com/x.git"], ["git lfs pull"], ["git push"], ["git remote add o x"], ["git remote show origin"], ["git remote update"],
+    ["git add ."], ["git commit -m x"], ["git checkout main"], ["git checkout -b feature/x"], ["git reset HEAD~1"], ["git stash"], ["git merge x"], ["git rebase main"], ["git tag v1"], ["git apply x.patch"], ["git init"],
+    ["git branch foo"], ["git branch -d old"], ["git branch -m a b"], ["git branch -c a b"], ["git branch -u origin/main"], ["git branch --set-upstream-to=origin/main"], ["git branch --edit-description"],
+    ["git -c core.pager=evil log"], ["git -c core.fsmonitor=evil status"], ["git --git-dir=/x status"], ["git --work-tree=/x status"], ["git --exec-path=/x status"], ["git -p log"],
+    ["git diff --output=out.txt"], ["git log --output out.txt"], ["git show --output=x HEAD"], ["git diff --ext-diff"], ["git grep -O 'rm' x"], ["git grep --open-files-in-pager=evil x"], ["git grep -o x"], ["git log -o x"],
+    ["chmod 777 f"], ["chmod +x run.sh"], ["tar xf a.tar"], ["tar cf a.tar b"], ["zip a.zip b"], ["unzip a.zip"], ["gzip f"], ["open ."], ["open -a Safari"], ["defaults read com.apple.finder"],
+    ["sed -n '1,5p' file.txt"], ["sed 's/a/b/' file.txt"], ["awk '{print $1}' f"], ["xargs echo"], ["brew install x"], ["pip install x"], ["touch f"], ["mkdir d"], ["cp a b"], ["tee f"],
+    ["find . -fprint out.txt"], ["find . -fprintf out.txt x"], ["find . -fls out.txt"], ["find . -ok rm {} ;"], ["find . -okdir rm {} ;"], ["find . -execdir ls {} ;"],
+    ["sort -o out.txt in.txt"], ["sort -oout.txt in.txt"], ["sort --output=out.txt in.txt"], ["sort -ro out.txt in.txt"], ["sort --compress-program=evil in.txt"], ["sort -T /tmp in.txt"], ["uniq in.txt out.txt"],
+    ["rg --pre ./evil x"], ["rg --pre=./evil x"], ["rg --hostname-bin ./evil x"], ["rg -z x"], ["rg --search-zip x"], ["file -C -m magic"], ["file --compile"], ["uname -S name"],
+    ["date -s 12:00"], ["date --set=12:00"], ["date 1020120026"], ["env FOO=1 ls"], ["env ls"], ["env -S 'ls -l'"], ["env -u FOO ls"],
+    ["./ls"], ["./ls -la"], ["../bin/cat x"], ["/tmp/ls"], ["~/bin/ls"], ["/usr/local/bin/ls"], ["/opt/homebrew/bin/git status"], ["LS"], ["Git status"], ["lsx"], ["ls2"],
+    ["for f in a b; do ls; done"], ["if true; then ls; fi"], ["{ ls; }"], ["! ls"], ["while true; do ls; done"],
+    ["tail -f x | sh"], ["ls | tee f"], ["echo x | python3 -c 'pass'"], ["cat <<< hi"], ["time ls"], ["nice ls"], ["nohup ls"], ["timeout 5 ls"], ["command ls"], ["builtin pwd"], ["exec ls"],
   ];
   for (const [command] of NOT) {
     test(`not always: ${JSON.stringify(command).slice(0, 70)}`, () => {
@@ -82,9 +111,30 @@ describe("shell classifier: Always allow", () => {
       if (!v.always) assert.ok(v.reason.length > 0 && v.reason.endsWith("."), "a plain sentence");
     });
   }
-  test("the table is big enough", () => assert.ok(ALWAYS.length + NOT.length >= 40));
+  test("the table is big enough", () => assert.ok(ALWAYS.length >= 30 && NOT.length >= 250, `${ALWAYS.length} + ${NOT.length}`));
+  test("a script runner gets its own sentence; the rest says it is not on the list", () => {
+    for (const command of ["npm test", "make", "python3 -m x", "node --require x", "./build.sh", "swift build", "cargo test"]) {
+      assert.deepEqual(shellAlways(command), { always: false, reason: "This command runs code from files TBD's agent can change, so TBD asks every time." }, command);
+    }
+    const net = shellAlways("curl -o f https://example.com/x");
+    assert.equal(net.always, false);
+    if (!net.always) assert.match(net.reason, /reach the network/);
+    const pull = shellAlways("git pull");
+    if (!pull.always) assert.match(pull.reason, /reach the network/);
+  });
+  test("the old rules for commands that no longer qualify are ignored (the card shows)", () => {
+    for (const command of ["npm test", "make", "git commit -m x", "FOO=bar ls"]) assert.equal(shellAlways(command).always, false, command);
+  });
+  test("every positive is exact: one more word or option can turn it into a no", () => {
+    assert.equal(shellAlways("git status").always, true);
+    assert.equal(shellAlways("git status; git push").always, false);
+    assert.equal(shellAlways("ls | sort -o f").always, false);
+    assert.equal(shellAlways("ls && npm test").always, false);
+    assert.equal(shellAlways("git branch -a foo").always, false, "a name without --list creates a branch");
+    assert.equal(shellAlways("git branch --list foo").always, true);
+  });
   test("trims the command and ignores leading and trailing whitespace", () => {
-    assert.deepEqual(shellAlways("  npm test \n"), { always: true });
+    assert.deepEqual(shellAlways("  ls -la \n"), { always: true });
     assert.equal(shellAlways("   ").always, true, "an empty command has nothing destructive (the caller refuses it)");
   });
   test("a long but harmless command at the limit is still fine", () => {
@@ -92,12 +142,47 @@ describe("shell classifier: Always allow", () => {
   });
 });
 
+describe("the shell card (dev.17 review B1, B2)", () => {
+  const nowhere = () => null;
+  const cardOf = (command: string) => {
+    const t = localTarget("Bash", { command }, nowhere);
+    assert.ok(t && "key" in t);
+    return buildLocalCard(t);
+  };
+  test("an allowed command: Always allow covers this exact command only", () => {
+    const c = cardOf("git status");
+    assert.equal(c.alwaysOffered, true);
+    assert.equal(c.scope, "Always allow covers this exact command only.");
+  });
+  test("a script runner has no Always and the card says why", () => {
+    for (const command of ["npm test", "make", "python3 -m x", "node --require x app.js", "./build.sh"]) {
+      const c = cardOf(command);
+      assert.equal(c.alwaysOffered, false, command);
+      assert.equal(c.scope, undefined, command);
+      assert.equal(c.note, "This command runs code from files TBD's agent can change, so TBD asks every time.", command);
+      assert.equal(c.hint, EVERY_TIME_LINE, command);
+    }
+  });
+  test("a stored Always for a command that is not on the allow-list is ignored: the card shows", async () => {
+    const w = world();
+    const store = w.store();
+    for (const command of ["npm test", "make", "git commit -m x", "curl -o f https://example.com/x"]) store.remember(`shell:${command}`, "always");
+    const { deps, cards } = w.deps(store);
+    for (const command of ["npm test", "make", "git commit -m x", "curl -o f https://example.com/x"]) {
+      const r = await decideLocalCall({ tool: "Bash", input: { command } }, deps);
+      assert.equal(r?.allow, false, command);
+    }
+    assert.equal(cards.length, 4);
+    assert.ok(cards.every((c) => c.card.alwaysOffered === false));
+  });
+});
+
 describe("keys", () => {
   const nowhere = () => null;
   test("shell: the exact command text, trimmed", () => {
-    const t = localTarget("Bash", { command: "  npm test  \n" }, nowhere);
+    const t = localTarget("Bash", { command: "  git status  \n" }, nowhere);
     assert.ok(t && "key" in t);
-    assert.equal(t.key, "shell:npm test");
+    assert.equal(t.key, "shell:git status");
     assert.equal(t.alwaysOk, true);
     const d = localTarget("Bash", { command: "rm x" }, nowhere);
     assert.ok(d && "key" in d && d.alwaysOk === false && d.key === "shell:rm x" && d.why);
@@ -197,6 +282,59 @@ describe("keys", () => {
     assert.equal(inside.folder, join(w.proj, "src"));
     assert.equal(inside.alwaysOk, true);
   });
+  test("write: a DANGLING link out of a granted folder gives the real target (dev.17 review S3)", () => {
+    const w = world();
+    const outside = join(w.home, "other");
+    // ws/link.txt -> other/new.txt (does not exist yet): a write creates other/new.txt
+    symlinkSync(join(outside, "new.txt"), join(w.proj, "link.txt"));
+    const file = writeScope("Write", { file_path: join(w.proj, "link.txt") }, w.ctx);
+    assert.ok(file);
+    assert.equal(file.file, join(outside, "new.txt"), "the real target, not the link");
+    assert.equal(file.folder, outside);
+    assert.equal(file.alwaysOk, false, "outside the agent's folders: no Always");
+    assert.equal(file.via, join(w.proj, "link.txt"));
+    // ws/dirlink -> other/newdir (does not exist yet): a write to dirlink/f.txt lands in other/newdir
+    symlinkSync(join(outside, "newdir"), join(w.proj, "dirlink"));
+    const inDir = writeScope("Write", { file_path: join(w.proj, "dirlink/f.txt") }, w.ctx);
+    assert.ok(inDir);
+    assert.equal(inDir.file, join(outside, "newdir/f.txt"));
+    assert.equal(inDir.folder, join(outside, "newdir"));
+    assert.equal(inDir.alwaysOk, false);
+    // a chain of links, relative targets, a dangling end
+    symlinkSync("hop2", join(w.proj, "hop1"));
+    symlinkSync("../other/chain-end.txt", join(w.proj, "hop2"));
+    const chain = writeScope("Write", { file_path: join(w.proj, "hop1") }, w.ctx);
+    assert.ok(chain);
+    assert.equal(chain.file, join(outside, "chain-end.txt"));
+    assert.equal(chain.alwaysOk, false);
+    // a dangling link that stays INSIDE the granted folder keeps Always, with the real folder
+    symlinkSync(join(w.proj, "src/inner-new.ts"), join(w.proj, "inner-link.ts"));
+    const inner = writeScope("Write", { file_path: join(w.proj, "inner-link.ts") }, w.ctx);
+    assert.ok(inner);
+    assert.equal(inner.file, join(w.proj, "src/inner-new.ts"));
+    assert.equal(inner.alwaysOk, true);
+  });
+  test("write: a dangling link to a secret location is refused (the secret check sees the real path)", () => {
+    const w = world();
+    symlinkSync(join(w.home, ".ssh/authorized_keys_new"), join(w.proj, "k.txt"));
+    symlinkSync(join(w.home, ".ssh/newdir"), join(w.proj, "kd"));
+    for (const path of [join(w.proj, "k.txt"), join(w.proj, "kd/id_x")]) {
+      assert.equal(decide("Write", { file_path: path }, w.ctx).kind, "deny", path);
+      assert.equal(decide("Edit", { file_path: path }, w.ctx).kind, "deny", path);
+      const scope = writeScope("Write", { file_path: path }, w.ctx);
+      assert.ok(scope && scope.alwaysOk === false, path);
+    }
+    // a link to the agent's own data folder, dangling
+    symlinkSync(join(w.ctx.tbdData, "new-file"), join(w.proj, "d.txt"));
+    assert.equal(decide("Write", { file_path: join(w.proj, "d.txt") }, w.ctx).kind, "deny");
+  });
+  test("realPath: a loop of links and a missing parent come back as they are", () => {
+    const w = world();
+    symlinkSync(join(w.proj, "loop-b"), join(w.proj, "loop-a"));
+    symlinkSync(join(w.proj, "loop-a"), join(w.proj, "loop-b"));
+    assert.equal(realPath(join(w.proj, "loop-a")), join(w.proj, "loop-a"), "40 hops at most, then the path itself");
+    assert.equal(realPath(join(w.proj, "no/such/dir/f.txt")), join(w.proj, "no/such/dir/f.txt"));
+  });
   test("write: .. and ~ resolve before the folder is taken", () => {
     const w = world();
     const up = writeScope("Write", { file_path: join(w.proj, "src/../../other/a.txt") }, w.ctx);
@@ -229,8 +367,9 @@ describe("web: which addresses never get Always (ask every time)", () => {
   const verdict = (url: string) => webAlwaysVerdict(new URL(url));
   const ALWAYS = [
     "https://example.com/", "http://example.com/a?b=c", "https://docs.example.co.uk/x", "https://EXAMPLE.com", "https://example.com:443/x", "http://example.com:80/x",
-    "https://sub.domain.example.org/path#frag", "https://xn--exmple-cua.com/", "https://a.b.c.d.example.com/", "https://localhost.example.com/", "https://mylocal.example.com/",
+    "https://sub.domain.example.org/path#frag", "https://xn--exmple-cua.com/", "https://a.b.c.d.example.com/", "https://mylocal.example.com/",
     "https://local.example.com/", "https://notlocalhost.example/", "https://example.localhost.example.com/",
+    "https://lan.example.com/", "https://internal.example.com/", "https://corp.example.com/", "https://nip.io/", "https://example-nip.io/", "https://mylocaltest.me/", "https://sslip.io/", "https://homearpa.org/",
   ];
   for (const url of ALWAYS) test(`Always possible: ${url}`, () => assert.deepEqual(verdict(url), { always: true }, url));
 
@@ -255,9 +394,14 @@ describe("web: which addresses never get Always (ask every time)", () => {
     // a user name or password in the address
     ["https://user@example.com/", "user"], ["https://user:pass@example.com/", "user"], ["https://:pass@example.com/", "user"], ["https://good.com@evil.example/", "user"], ["http://admin@example.org/x", "user"],
     // a port other than the default
+    // dev.17 review S7: names made for private networks, and names that point to a private address on purpose
+    ["http://printer.lan/", "name"], ["http://nas.LAN/", "name"], ["http://a.b.lan./", "name"], ["http://git.internal/", "name"], ["https://app.internal/x", "name"], ["http://router.home.arpa/", "name"], ["http://x.y.home.arpa/", "name"],
+    ["http://intranet.corp/", "name"], ["https://wiki.corp/", "name"], ["http://hr.intranet/", "name"], ["http://host.localdomain/", "name"], ["http://x.localdomain/", "name"],
+    ["http://localhost.example.com/", "name"], ["https://localhost.evil.test/", "name"], ["http://localhost.localdomain/", "name"],
+    ["http://10.0.0.1.nip.io/", "name"], ["http://anything.nip.io/", "name"], ["http://192-168-1-1.sslip.io/", "name"], ["http://x.sslip.io/", "name"], ["http://localtest.me/", "name"], ["http://app.localtest.me/", "name"], ["https://a.b.localtest.me/", "name"],
     ["https://example.com:8443/", "port"], ["http://example.com:8080/", "port"], ["https://example.com:80/", "port"], ["http://example.com:443/", "port"], ["http://example.com:1/", "port"], ["https://api.example.com:65535/", "port"],
   ];
-  const REASON: Record<string, RegExp> = { mac: /on this Mac/, lan: /your own network/, ip: /a number/, user: /user name or password/, port: /special port/ };
+  const REASON: Record<string, RegExp> = { mac: /on this Mac/, lan: /your own network/, ip: /a number/, user: /user name or password/, port: /special port/, name: /often used for devices on your own network/ };
   for (const [url, kind] of NOT) {
     test(`no Always (${kind}): ${url}`, () => {
       const v = verdict(url);
@@ -268,7 +412,7 @@ describe("web: which addresses never get Always (ask every time)", () => {
       }
     });
   }
-  test("the table is big enough", () => assert.ok(ALWAYS.length + NOT.length >= 80, String(ALWAYS.length + NOT.length)));
+  test("the table is big enough", () => assert.ok(ALWAYS.length + NOT.length >= 110, String(ALWAYS.length + NOT.length)));
 
   test("a user part and a port on a local address keep the local reason (the first thing the person should know)", () => {
     assert.match((verdict("http://user@localhost:3000/") as { reason: string }).reason, /on this Mac/);
@@ -316,6 +460,24 @@ describe("web: which addresses never get Always (ask every time)", () => {
     const ok = localTarget("WebFetch", { url: "https://example.com/" }, nowhere);
     assert.ok(ok && "key" in ok);
     assert.equal(buildLocalCard(ok).alwaysOffered, true, "an ordinary address still offers Always");
+  });
+
+  test("S7: the card for an ordinary name says that TBD does not see where a name points; a private-network name has no Always", () => {
+    const ok = localTarget("WebFetch", { url: "https://example.com/" }, nowhere);
+    assert.ok(ok && "key" in ok);
+    const card = buildLocalCard(ok);
+    assert.equal(card.alwaysOffered, true);
+    assert.match(card.scope ?? "", /^Always allow covers fetching from example\.com only\. TBD cannot see where a name points: it can point to a device on your own network\.$/);
+    for (const url of ["http://printer.lan/", "http://wiki.corp/x", "http://10.0.0.1.nip.io/", "http://app.localtest.me/", "http://localhost.example.com/"]) {
+      const t = localTarget("WebFetch", { url }, nowhere);
+      assert.ok(t && "key" in t, url);
+      assert.equal(t.alwaysOk, false, url);
+      const c = buildLocalCard(t);
+      assert.equal(c.alwaysOffered, false, url);
+      assert.equal(c.scope, undefined, url);
+      assert.match(c.note ?? "", /often used for devices on your own network/, url);
+      assert.equal(c.leavesMac, true, url);
+    }
   });
 
   test("a stored Always for a host does not carry to a call that no longer allows it; a stored Never still does", async () => {
@@ -383,12 +545,12 @@ describe("the decision order", () => {
   test("a stored Always allows without a card, only while the call still allows Always", async () => {
     const w = world();
     const store = w.store();
-    store.remember("shell:npm test", "always");
+    store.remember("shell:git status", "always");
     store.remember(`write:${w.proj}`, "always");
     store.remember("web:example.com", "always");
     store.remember("websearch", "always");
     const { deps, cards } = w.deps(store);
-    for (const [tool, input] of [["Bash", { command: "npm test" }], ["Write", { file_path: join(w.proj, "a.txt") }], ["WebFetch", { url: "https://EXAMPLE.com/x" }], ["WebSearch", { query: "anything" }]] as const) {
+    for (const [tool, input] of [["Bash", { command: "git status" }], ["Write", { file_path: join(w.proj, "a.txt") }], ["WebFetch", { url: "https://EXAMPLE.com/x" }], ["WebSearch", { query: "anything" }]] as const) {
       assert.deepEqual(await decideLocalCall({ tool, input }, deps), { allow: true, remember: "always" }, tool);
     }
     assert.deepEqual(cards, []);

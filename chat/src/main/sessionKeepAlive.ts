@@ -17,6 +17,12 @@
  */
 
 export interface KeepAliveDeps {
+  /**
+   * Runs once before the first check (dev.17 review S6): loads what `signedIn` needs, so a helper that starts with a stored session
+   * and no call from the window keeps the session alive within the first minute. It is the same load the first account call
+   * does (once, memoised), so it asks the Keychain no earlier than that call would. A failure is logged; the loop starts anyway.
+   */
+  prepare?(): Promise<unknown>;
   /** True while a person session is loaded in memory. Must not touch the Keychain. */
   signedIn(): boolean;
   /** One cheap authenticated read. Throws on any failure. Portal's client signs out on a 401 itself. */
@@ -99,7 +105,10 @@ export function createSessionKeepAlive(deps: KeepAliveDeps) {
       if (running) return;
       running = true;
       lastTick = now();
-      loop();
+      if (!deps.prepare) { loop(); return; }
+      void Promise.resolve().then(() => deps.prepare?.()).catch((error: unknown) => {
+        deps.log?.(`session keep-alive could not load the session (${error instanceof Error ? error.name : "error"})`);
+      }).finally(() => { lastTick = now(); if (running) loop(); });
     },
     stop(): void {
       running = false;

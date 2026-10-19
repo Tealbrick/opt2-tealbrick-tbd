@@ -17,7 +17,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   // Local actions (shell, file write, web): a permission request for Bash with the SAME request id in every process.
   if (m.type === "turn" && m.text === "local") {
     (globalThis as any).connecting = m;
-    return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "Bash", detail: "Run: npm test", input: { command: "npm test" } });
+    return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "Bash", detail: "Run: git status", input: { command: "git status" } });
   }
   if (m.type === "turn" && m.text === "local-check") {
     (globalThis as any).connecting = m;

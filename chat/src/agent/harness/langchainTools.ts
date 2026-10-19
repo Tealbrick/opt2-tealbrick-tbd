@@ -12,7 +12,7 @@ import type { ChatModelLike, GraphState, ToolSeam } from "./langchainGraph";
  * Tools of TBD's LangChain agent (WP-HARNESS L2): the same families, with the same names, as the Agent SDK agent,
  * so `needsPermission` and the consent rules apply unchanged.
  *
- *   mcp__companion__*   Companion timeline: stdio MCP server `<companionCli> mcp`, env { HOME } only
+ *   mcp__companion__*   Companion timeline: stdio MCP server `<companionCli> mcp`, env { HOME, TBD_APP_SUPPORT_DIR } only
  *   mcp__listening__*   Listening: native LangChain tools over the shared definitions (listeningDefs.ts)
  *   mcp__tealbrick__*   Teal Brick relay: stdio MCP server, exactly config.relay.env, only when connected
  *   ask_person          asks the person on a question card (protocol `question` / `answer`)

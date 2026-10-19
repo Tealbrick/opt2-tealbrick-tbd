@@ -37,6 +37,8 @@ export interface AgentConfig {
   claudeExecutable?: string;
   /** Harness-local tools (C5): Companion timeline MCP server and Listening CLI. */
   companionCli?: string;
+  /** The app's data folder (live or TBD Dev). The Companion server gets it as TBD_APP_SUPPORT_DIR (agent/companionEnv.ts). */
+  companionDataDir?: string;
   listeningCli?: string;
   /** Teal Brick apps through the local relay (stdio MCP child), once connected. */
   relay?: { command: string; args: string[]; env: Record<string, string> };

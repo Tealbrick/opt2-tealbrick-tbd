@@ -332,7 +332,8 @@ private func callTool(name: String, arguments: [String: Any]) -> [String: Any] {
 }
 
 /// The person's Flow list, the same file the app uses (read again at every read, locked at every change).
-private let flowStore = TBDFlowStore()
+// A read-only open: the plan tools that only read (flow_plan_today, flow_plan_add preview) make no lock file and move no file.
+private let flowStore = TBDFlowStore(quarantine: .onFirstWrite)
 
 private func openDB() throws -> Database {
   try Database(path: Database.defaultPath())

@@ -134,15 +134,17 @@ test("injection (local): Never allow is remembered; the next call is denied with
 });
 
 test("local: Always allow on a harmless command is remembered; the next call runs without a card", { skip, timeout: 180_000 }, async () => {
-  const touch = (): ModelStep => ({ name: "Bash", input: { command: "touch marker.txt" } });
+  // dev.17 review B1, B2: Always is for read-only commands only, so the stand-in is one that the SDK still asks about (`file`, unlike
+  // `echo` or `pwd`) and that prints something: it names the device file, which proves that the command ran.
+  const touch = (): ModelStep => ({ name: "Bash", input: { command: "file /dev/null" } });
   const r = await run(() => [touch(), touch()], { answers: ["always"] });
   assert.equal(r.seen.length, 1);
   assert.equal(r.seen[0].card.alwaysOffered, true);
   assert.equal(r.seen[0].card.hint, "Always allow is TBD's own permission on this Mac. It is not a Rules rule (that needs Rules).");
-  assert.equal(r.store.decision("shell:touch marker.txt"), "always");
-  assert.ok(existsSync(join(r.workspace, "marker.txt")));
+  assert.equal(r.store.decision("shell:file /dev/null"), "always");
   const results = r.model.seen.flatMap((s) => toolResultTexts(s.body));
   assert.equal(results.length >= 2 ? results.filter((t) => t.includes("declined") || t.includes("never allow")).length : -1, 0, `both ran: ${JSON.stringify(results)}`);
+  assert.ok(results.filter((t) => t.includes("/dev/null: character special")).length >= 2, `the command ran: ${JSON.stringify(results)}`);
 });
 
 test("local: a stored Never stops even a read-only command that the SDK would run without asking (the hook looks at every local call)", { skip, timeout: 180_000 }, async () => {

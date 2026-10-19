@@ -41,6 +41,7 @@ test("env isolation e2e: no model key in any MCP child; the relay keeps its TB_*
   const fake = await fakeServer("anthropic", [{ text: ["ok"] }]);
   const h = harness(fake.port, { harness: "langchain", model: "claude-fake", baseUrl: `http://127.0.0.1:${fake.port}`, secretEnv: { ANTHROPIC_API_KEY: ANTHROPIC_KEY } }, (dir) => ({
     companionCli: fakeMcpCommand(dir, "companion", join(dir, "companion-env.json"), "timeline_search"),
+    companionDataDir: join(dir, "app-data-dev"), // S8 (dev.17 review): the Companion server learns which app's data folder to use
     relay: { command: process.execPath, args: [fakeMcp, join(dir, "relay-env.json"), "memory_search"], env: RELAY_ENV },
   }));
   t.after(() => h.cleanup());
@@ -53,7 +54,7 @@ test("env isolation e2e: no model key in any MCP child; the relay keeps its TB_*
   const companion = join(h.dir, "companion-env.json");
   const relay = join(h.dir, "relay-env.json");
   assert.ok(existsSync(companion) && existsSync(relay), "both servers started and recorded their environment");
-  assertIsolated("companion", readEnv(companion), { HOME: process.env.HOME ?? "" }, true);
+  assertIsolated("companion", readEnv(companion), { HOME: process.env.HOME ?? "", TBD_APP_SUPPORT_DIR: join(h.dir, "app-data-dev") }, true);
   assertIsolated("relay", readEnv(relay), RELAY_ENV);
   const relayEnv = readEnv(relay);
   for (const name of Object.keys(RELAY_ENV).filter((n) => n.startsWith("TB_"))) assert.equal(relayEnv[name], RELAY_ENV[name as keyof typeof RELAY_ENV], `relay kept ${name}`);

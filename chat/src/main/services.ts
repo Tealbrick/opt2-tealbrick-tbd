@@ -66,11 +66,14 @@ function personStore() {
 /**
  * C7: while a person is signed in, one cheap read about every 30 min keeps Core's idle window sliding even when TBD's
  * window is closed or nothing else calls Portal (sessionKeepAlive.ts). Started once with the helper; it reads only the
- * in-memory session (never the Keychain) and makes no call while signed out.
+ * in-memory session (never the Keychain by itself: the session is loaded once at helper start, `prepare`, by the same load the
+ * first account call does) and makes no call while signed out.
  */
 let keepAlive: SessionKeepAlive | null = null;
 export function startSessionKeepAlive(): void {
   keepAlive ??= createSessionKeepAlive({
+    // S6: load the stored session at helper start (same memoised load as the first account call), so the loop sees it at once.
+    prepare: async () => { getServices(); await ensurePerson(); },
     signedIn: () => Boolean(services?.portal.session()),
     touch: () => { if (!services) throw new Error("no session"); return services.portal.me(); },
     log: (line) => console.error(`[helper] ${line}`),
@@ -123,11 +126,15 @@ export function agentFolders(): string[] {
 function saveFolders(list: string[]): void {
   writeFileSync(foldersFile(), JSON.stringify([...new Set(list)].sort(), null, 2), { mode: 0o600 });
 }
+/** The app's data folder (the parent of TBD_CHAT_DATA; the live one when the host did not say). */
+export function appDataDir(): string {
+  return process.env.TBD_CHAT_DATA ? dirname(process.env.TBD_CHAT_DATA) : join(appSupport(), APP_DATA_FOLDER);
+}
 export function policyContext(): PolicyContext {
   const home = realPath(homedir());
   // TBD's own data = the parent of TBD_CHAT_DATA (<app data>/Chat). Always denied too (C284): the archived v1 folders,
   // the other TBD v2 identity's folders (live vs TBD Dev) and the signer socket's folder.
-  const data = process.env.TBD_CHAT_DATA ? dirname(process.env.TBD_CHAT_DATA) : join(appSupport(), APP_DATA_FOLDER);
+  const data = appDataDir();
   const own = new Set([basename(data), agentFolder(basename(data))]);
   const others = [...ARCHIVED_V1_FOLDERS, ...ARCHIVED_V1_DEV_FOLDERS, ...identityFolders().filter((f) => !own.has(f))];
   return {
@@ -297,6 +304,8 @@ export function getServices(): Services {
         stateDir: join(dataDir(), stateName),
         claudeExecutable: join(resources, "claude"),
         companionCli: process.env.TBD_COMPANION_CLI,
+        // S8: the Companion server writes where THIS app (live or TBD Dev) keeps its data.
+        companionDataDir: appDataDir(),
         listeningCli: process.env.TBD_LISTENING_CLI,
         relay,
         sandbox: sandboxSettings(policyContext()),

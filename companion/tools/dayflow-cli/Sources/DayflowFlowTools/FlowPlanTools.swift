@@ -161,6 +161,9 @@ public enum FlowPlanTools {
     ]
     if store.isLockedByUnreadableFile {
       body["warning"] = "TBD could not read the plan file, so the list may be empty and nothing can be added."
+    } else if store.isUnreadable {
+      // This tool only reads: it left the file where it is. The next save keeps a copy of it first.
+      body["warning"] = "TBD could not read the plan file, so the list may be empty."
     }
     return .ok(body)
   }
@@ -240,6 +243,9 @@ public enum FlowPlanTools {
         ? "The same plan was already saved with this key. Nothing was added again."
         : "Saved to the person's plan on this Mac. They are not on Task Board."
       return .ok(body)
+    } catch is TBDRealDataGuard.Refused {
+      // L70: a test or a tool run must not write to the person's real TBD data. The sentence is shown as it is.
+      return .failure(TBDRealDataGuard.refusal, category: "execution_error")
     } catch TBDFlowError.idempotencyConflict {
       return .failure(
         "This idempotency_key was already used for a different plan. Use a new key, or send the same text.",

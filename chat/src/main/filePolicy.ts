@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 /**
@@ -45,17 +45,41 @@ export function expandHome(p: string, home: string): string {
   return p === "~" ? home : p.startsWith("~/") ? join(home, p.slice(2)) : p;
 }
 
-/** Resolve symlinks of the longest existing prefix, so a link cannot smuggle a secret path in. */
+/** True when something is at `p`, a link (also a dangling one) included. */
+function lexists(p: string): boolean {
+  try { lstatSync(p); return true; } catch { return false; }
+}
+
+/** The most links followed for one path (the kernel's own limit is 32 on macOS; 40 as on Linux). */
+export const MAX_LINK_HOPS = 40;
+
+/**
+ * Resolve symlinks of the longest existing prefix, so a link cannot smuggle a secret path in. A last component that is a link
+ * to something that does not exist yet (a dangling link) is followed too, with `lstat` and `readlink` (at most 40 hops): a write
+ * through `ws/link.txt -> outside/new` lands in `outside/new`, so the secret check and the Always scope must see that path.
+ * `p` itself comes back when it cannot be resolved (a loop, an unreadable folder).
+ */
 export function realPath(p: string): string {
   let cur = p;
   const rest: string[] = [];
-  while (!existsSync(cur)) {
-    const parent = dirname(cur);
-    if (parent === cur) return p;
-    rest.unshift(basename(cur));
-    cur = parent;
+  for (let hops = 0; hops <= MAX_LINK_HOPS; ) {
+    // The longest prefix that exists as an entry (a link counts even when its target is missing).
+    while (!lexists(cur)) {
+      const parent = dirname(cur);
+      if (parent === cur) return p;
+      rest.unshift(basename(cur));
+      cur = parent;
+    }
+    try {
+      if (!lstatSync(cur).isSymbolicLink()) return join(realpathSync(cur), ...rest);
+      // A link: its target is read against the link's real folder, then the same walk starts again from the target.
+      const target = readlinkSync(cur);
+      const folder = realpathSync(dirname(cur));
+      cur = resolve(folder, target);
+      hops++;
+    } catch { return p; }
   }
-  try { return join(realpathSync(cur), ...rest); } catch { return p; }
+  return p;
 }
 
 /** macOS file systems are case-insensitive by default: "…/tbd" is "…/TBD". Compare folded there. */
@@ -100,6 +124,10 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", 
  * real folder (links resolved) and whether "Always allow" may be offered for that folder. Only a folder inside the agent's
  * workspace or an already granted folder qualifies, never the home folder or `/`, never a protected location. `via` is the
  * path the agent named when it differs from the real one (a link, `~`, a relative path). Null when the call names no single file.
+ *
+ * Known limit (dev.17 review S4, late swap): the real path is worked out when the call is asked. A link that the agent (or another
+ * process) puts in place between the card and the write is not looked at again. The shell sandbox and the secret list still
+ * apply at write time, and the Always scope stays a real folder, but the window between the check and the write is not closed.
  */
 export interface WriteScope { file: string; folder: string; alwaysOk: boolean; via: string | null }
 export function writeScope(tool: string, input: Record<string, unknown>, ctx: PolicyContext): WriteScope | null {

@@ -9,7 +9,7 @@ import { createLocalConsentStore, decideLocalCall, type LocalTarget } from "../s
 import type { LocalCard } from "../src/shared/ipc.ts";
 import { existsSync } from "node:fs";
 import { fakeConnectModel, toolResultTexts, type ModelStep } from "./fixtures/fake-connect-model.ts";
-import { ANTHROPIC_KEY, fakeMcpCommand, fakeServer, harness, skip as lcSkip, type Step } from "./fixtures/langchain-harness.ts";
+import { ANTHROPIC_KEY, fakeMcpCommand, fakeServer, harness, readEnv, skip as lcSkip, type Step } from "./fixtures/langchain-harness.ts";
 
 // dev.17 U3, end to end in BOTH harnesses: the scripted model calls Companion's flow_plan_add; the helper side is the real decision
 // chain (decideLocalCall) with a fake card. "save" waits for the card (nothing reaches the tool before the answer); "preview" and
@@ -68,6 +68,7 @@ async function runSdk(inputs: Record<string, unknown>[], answers: Answer[], opti
     config: async () => ({
       cwd: workspace, stateDir: join(dir, "state"), claudeExecutable: claude,
       companionCli: fakeMcpCommand(dir, "companion", join(dir, "companion-env.json"), options.fakeTool ?? "flow_plan_add"),
+      companionDataDir: join(dir, "app-data-dev"),
       relay: { command: process.execPath, args: [relayScript, join(dir, "relay.log"), ""], env: relayEnv(dir) },
       ...(options.noConsent ? { testNoLocalConsent: true } : {}),
     }),
@@ -105,6 +106,8 @@ test("Agent SDK: Approve runs the tool once and asks once", { skip: sdkSkip, tim
   assert.equal(r.asked.length, 1);
   assert.ok(r.results.at(-1)?.includes(ECHO), r.results.join("|"));
   assert.deepEqual(r.store.list(), []);
+  // S8: the Companion server of the Agent SDK harness got the app's data folder, so TBD Dev's agent writes into the -dev folder.
+  assert.equal(readEnv(join(r.dir, "companion-env.json")).TBD_APP_SUPPORT_DIR, join(r.dir, "app-data-dev"));
 });
 
 test("Agent SDK: preview asks nobody and runs", { skip: sdkSkip, timeout: 180_000 }, async () => {

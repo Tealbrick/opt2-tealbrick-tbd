@@ -22,6 +22,10 @@ public struct TBDFlowTickResult: Equatable, Sendable {
 /// - A file that cannot be read is moved aside to `flow.json.corrupt-<timestamp>` (renamed, never deleted) and Flow
 ///   starts empty; `corruptBackupURL` tells the app so it can say so. If the file cannot be moved aside, the store
 ///   refuses every write (`isLockedByUnreadableFile`): it never overwrites the unreadable file.
+/// - Reading is read-only: `quarantine: .onFirstWrite` (the companion CLI) opens the store without a lock file and without
+///   moving an unreadable file; the unreadable file is moved aside only by the first change (`isUnreadable` says so meanwhile).
+/// - L70: a write, a lock file or a folder under the person's REAL TBD data is refused (`TBDRealDataGuard`) when the process is a
+///   test or a tool outside the app. Reads stay allowed.
 /// - The clock and the id generator are injected, so tests do not depend on the real date.
 public final class TBDFlowStore: @unchecked Sendable {
     /// `~/Library/Application Support/<TBD data folder>/Companion/flow.json`. The data folder is `TBDIdentity.dataFolder`
@@ -29,6 +33,9 @@ public final class TBDFlowStore: @unchecked Sendable {
     public static var defaultURL: URL {
         TBDIdentity.applicationSupport("Companion").appendingPathComponent("flow.json")
     }
+
+    /// The plan-import records (idempotency keys) kept in the file: the 500 newest. An older key can be used again.
+    public static let maxImportRecords = 500
 
     /// A reminder that was acknowledged this long ago, for a task that is gone or finished, is dropped by `tick`.
     public static let reminderRetention: TimeInterval = 14 * 24 * 3600
@@ -48,6 +55,12 @@ public final class TBDFlowStore: @unchecked Sendable {
     private var seen: FileSignature?
     /// The open lock file (`flow.json.lock`), opened on first use and kept for the life of the store.
     private var lockFD: Int32 = -1
+    /// When an unreadable file is moved aside: when the store opens (the app), or at the first change (a tool that only reads).
+    public enum Quarantine: Sendable { case atOpen, onFirstWrite }
+    private let quarantineAtOpen: Bool
+    private let realDataGuard: TBDRealDataGuard.Context
+    /// The file could not be read and has not been moved aside yet (a read-only open, or the guard refused the move).
+    private var unreadablePending = false
 
     /// How long a change waits for the other process's lock before it gives up.
     nonisolated(unsafe) static var lockTimeout: TimeInterval = 10
@@ -61,13 +74,21 @@ public final class TBDFlowStore: @unchecked Sendable {
     }
 
     public init(url: URL = TBDFlowStore.defaultURL, clock: @escaping @Sendable () -> Date = { Date() },
-                makeID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() }) {
+                makeID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
+                quarantine: Quarantine = .atOpen, realDataGuard: TBDRealDataGuard.Context = .current) {
         self.url = url
         self.clock = clock
         self.makeID = makeID
+        self.quarantineAtOpen = quarantine == .atOpen
+        self.realDataGuard = realDataGuard
         self.current = TBDFlowState()
-        // The first read takes the lock too: two processes must not both move an unreadable file aside.
-        _ = try? withFileLock(createFolder: false) { reloadLocked() }
+        if quarantine == .atOpen {
+            // The first read takes the lock too: two processes must not both move an unreadable file aside.
+            _ = try? withFileLock(createFolder: false) { reloadLocked(quarantine: true) }
+        } else {
+            // A read: no lock file, no move.
+            reloadLocked(quarantine: false)
+        }
     }
 
     deinit { if lockFD >= 0 { close(lockFD) } }
@@ -78,6 +99,8 @@ public final class TBDFlowStore: @unchecked Sendable {
     public var corruptBackupURL: URL? { locked { movedAside } }
     /// The list file could not be read and could not be moved aside: the list is empty and every write is refused.
     public var isLockedByUnreadableFile: Bool { locked { unreadableAndKept } }
+    /// The list file could not be read (it has not been moved aside yet, or it could not be). The list shown is empty.
+    public var isUnreadable: Bool { locked { unreadableAndKept || unreadablePending } }
 
     // MARK: Disk
 
@@ -86,7 +109,10 @@ public final class TBDFlowStore: @unchecked Sendable {
         return try body()
     }
 
-    private func loadFromDisk() -> TBDFlowState {
+    /// True when the guard lets this process write under the list's folder.
+    private func mayWrite() -> Bool { !TBDRealDataGuard.refuses(writingTo: url, context: realDataGuard) }
+
+    private func loadFromDisk(quarantine: Bool) -> TBDFlowState {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path) else { return TBDFlowState() }
         if let data = try? Data(contentsOf: url),
@@ -95,6 +121,8 @@ public final class TBDFlowStore: @unchecked Sendable {
             return decoded
         }
         // Unreadable, not JSON of our shape, or written by a newer build: keep the bytes, start empty.
+        // A read-only open (or a refused write, L70) leaves the file where it is; the first change moves it aside.
+        guard quarantine, mayWrite() else { unreadablePending = true; return TBDFlowState() }
         let stamp = Self.stamp(clock())
         var target = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".corrupt-" + stamp)
         var n = 1
@@ -116,13 +144,15 @@ public final class TBDFlowStore: @unchecked Sendable {
     /// Reads the file again when it is not the one `current` came from. Caller holds the state lock (and, for a change,
     /// the file lock). Returns whether the state is now different.
     @discardableResult
-    private func reloadLocked() -> Bool {
+    private func reloadLocked(quarantine: Bool) -> Bool {
         // The signature is taken BEFORE the read: a file replaced in between is seen as changed next time, never missed.
         let signature = Self.signature(of: url)
-        if signature == seen { return false }
+        // An unreadable file that was only read is looked at again by a change, which moves it aside.
+        if signature == seen && !(quarantine && unreadablePending && mayWrite()) { return false }
         let before = current
         unreadableAndKept = false
-        current = loadFromDisk()
+        unreadablePending = false
+        current = loadFromDisk(quarantine: quarantine)
         seen = FileManager.default.fileExists(atPath: url.path) ? signature : nil
         return current != before
     }
@@ -130,6 +160,8 @@ public final class TBDFlowStore: @unchecked Sendable {
     /// The file lock: blocks (up to `lockTimeout`) while another process or store holds it. Throws `.storage` when the lock
     /// file cannot be opened or the wait ends.
     private func withFileLock<T>(createFolder: Bool, _ body: () throws -> T) throws -> T {
+        // L70: no folder, no lock file under the real TBD data from a test or a tool. A change stops here; a read goes on without the lock.
+        if createFolder { try TBDRealDataGuard.check(writingTo: url, context: realDataGuard) } else if !mayWrite() { return try body() }
         if lockFD < 0 {
             let dir = url.deletingLastPathComponent()
             if createFolder { try ensureFolder(dir) } else if !FileManager.default.fileExists(atPath: dir.path) { return try body() }
@@ -168,7 +200,8 @@ public final class TBDFlowStore: @unchecked Sendable {
     public func reloadIfChanged() -> Bool {
         locked {
             if Self.signature(of: url) == seen { return false }
-            return (try? withFileLock(createFolder: false) { reloadLocked() }) ?? false
+            if !quarantineAtOpen { return reloadLocked(quarantine: false) }
+            return (try? withFileLock(createFolder: false) { reloadLocked(quarantine: true) }) ?? false
         }
     }
 
@@ -181,6 +214,7 @@ public final class TBDFlowStore: @unchecked Sendable {
     }
 
     private func write(_ state: TBDFlowState) throws {
+        try TBDRealDataGuard.check(writingTo: url, context: realDataGuard)
         if unreadableAndKept {
             throw TBDFlowError.storage("Flow could not read the list file and could not move it aside, so it does not save over it")
         }
@@ -211,7 +245,7 @@ public final class TBDFlowStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return try withFileLock(createFolder: true) {
             // Another process may have saved since this store last looked: start from what is on disk now.
-            reloadLocked()
+            reloadLocked(quarantine: true)
             var next = current
             let result = try body(&next, override ?? clock())
             if next != current {
@@ -469,53 +503,65 @@ public final class TBDFlowStore: @unchecked Sendable {
     /// "Start: X" at the start (or at the end for a task with only an end), and "Timebox ended: X — finish or replan" at
     /// the end of a timebox for a task that is not done. A reminder is made once per `dedupKey`. A timebox that ended
     /// acknowledges the task's start reminder. A running timer past its end becomes `finished`. Old acknowledged reminders
-    /// of finished or deleted tasks are dropped after `reminderRetention`. A tick that changes nothing writes nothing.
+    /// of finished or deleted tasks are dropped after `reminderRetention`. A tick that changes nothing writes nothing and takes no lock.
     @discardableResult
     public func tick(now: Date? = nil) throws -> TBDFlowTickResult {
-        try mutate(now: now) { state, now in
-            var created: [TBDFlowReminder] = []
-            func add(_ kind: TBDFlowReminderKind, _ task: TBDFlowTask, at when: Date, title: String) {
-                let key = TBDFlowReminder.dedupKey(kind: kind, taskID: task.id, at: when)
-                guard !state.reminders.contains(where: { $0.dedupKey == key }) else { return }
-                var r = TBDFlowReminder(id: makeID(), kind: kind, taskID: task.id, title: title, createdAt: now, dedupKey: key)
-                if now.timeIntervalSince(when) > Self.staleReminderAge {
-                    // Long overdue when first seen: remembered for dedup, never shown.
-                    r.acknowledgedAt = now
-                    state.reminders.append(r)
-                    return
-                }
-                state.reminders.append(r)
-                created.append(r)
-            }
-            for task in state.tasks where task.status == .todo || task.status == .doing {
-                if let when = task.startAt ?? task.endAt, when <= now {
-                    let timeboxOver = task.startAt != nil && (task.endAt.map { $0 <= now } ?? false)
-                    if !timeboxOver { add(.start, task, at: when, title: "Start: " + task.title) }
-                }
-                if task.startAt != nil, let end = task.endAt, end <= now {
-                    // End of the budget, not completion: the end reminder supersedes the start reminder.
-                    for i in state.reminders.indices
-                    where state.reminders[i].taskID == task.id && state.reminders[i].kind == .start && state.reminders[i].acknowledgedAt == nil {
-                        state.reminders[i].acknowledgedAt = now
-                    }
-                    add(.timeboxEnded, task, at: end, title: "Timebox ended: " + task.title + " — finish or replan")
-                }
-            }
-            var finished: TBDFlowFocus?
-            if var f = state.focus, f.status == .running, let end = f.endsAt, end <= now {
-                f.status = .finished
-                f.finishedAt = now
-                state.focus = f
-                finished = f
-            }
-            let live = Dictionary(state.tasks.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
-            state.reminders.removeAll { r in
-                guard let ack = r.acknowledgedAt, now.timeIntervalSince(ack) > Self.reminderRetention else { return false }
-                guard let status = live[r.taskID] else { return true }
-                return status == .done || status == .cancelled
-            }
-            return TBDFlowTickResult(newReminders: created, finishedFocus: finished)
+        // The app calls this every second. A tick that has nothing to do must not take the file lock (or write): look at the file
+        // with a stat, work out the tick on a copy, and go to `mutate` (lock, reload, write) only when it would change something.
+        reloadIfChanged()
+        let when = now ?? clock()
+        let due: Bool = locked {
+            var copy = current
+            _ = Self.applyTick(&copy, now: when, makeID: { "dry-run" })
+            return copy != current
         }
+        guard due else { return TBDFlowTickResult(newReminders: [], finishedFocus: nil) }
+        return try mutate(now: when) { state, now in Self.applyTick(&state, now: now, makeID: makeID) }
+    }
+
+    private static func applyTick(_ state: inout TBDFlowState, now: Date, makeID: () -> String) -> TBDFlowTickResult {
+        var created: [TBDFlowReminder] = []
+        func add(_ kind: TBDFlowReminderKind, _ task: TBDFlowTask, at when: Date, title: String) {
+            let key = TBDFlowReminder.dedupKey(kind: kind, taskID: task.id, at: when)
+            guard !state.reminders.contains(where: { $0.dedupKey == key }) else { return }
+            var r = TBDFlowReminder(id: makeID(), kind: kind, taskID: task.id, title: title, createdAt: now, dedupKey: key)
+            if now.timeIntervalSince(when) > Self.staleReminderAge {
+                // Long overdue when first seen: remembered for dedup, never shown.
+                r.acknowledgedAt = now
+                state.reminders.append(r)
+                return
+            }
+            state.reminders.append(r)
+            created.append(r)
+        }
+        for task in state.tasks where task.status == .todo || task.status == .doing {
+            if let when = task.startAt ?? task.endAt, when <= now {
+                let timeboxOver = task.startAt != nil && (task.endAt.map { $0 <= now } ?? false)
+                if !timeboxOver { add(.start, task, at: when, title: "Start: " + task.title) }
+            }
+            if task.startAt != nil, let end = task.endAt, end <= now {
+                // End of the budget, not completion: the end reminder supersedes the start reminder.
+                for i in state.reminders.indices
+                where state.reminders[i].taskID == task.id && state.reminders[i].kind == .start && state.reminders[i].acknowledgedAt == nil {
+                    state.reminders[i].acknowledgedAt = now
+                }
+                add(.timeboxEnded, task, at: end, title: "Timebox ended: " + task.title + " — finish or replan")
+            }
+        }
+        var finished: TBDFlowFocus?
+        if var f = state.focus, f.status == .running, let end = f.endsAt, end <= now {
+            f.status = .finished
+            f.finishedAt = now
+            state.focus = f
+            finished = f
+        }
+        let live = Dictionary(state.tasks.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+        state.reminders.removeAll { r in
+            guard let ack = r.acknowledgedAt, now.timeIntervalSince(ack) > Self.reminderRetention else { return false }
+            guard let status = live[r.taskID] else { return true }
+            return status == .done || status == .cancelled
+        }
+        return TBDFlowTickResult(newReminders: created, finishedFocus: finished)
     }
 
     // MARK: Card labels

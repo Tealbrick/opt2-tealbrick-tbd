@@ -29,6 +29,10 @@ const R_WRITES = "This command writes to a file.";
 const R_SYSTEM = "This command changes settings of this Mac or runs as an administrator.";
 const R_HIDDEN = "This command has characters that the card cannot show.";
 const R_LONG = "This command is too long to check.";
+const R_RUNNER = "This command runs code from files TBD's agent can change, so TBD asks every time.";
+const R_NOT_LISTED = "Always allow is only for commands that just look at things. This one is not on that list, so TBD asks every time.";
+const R_NETWORK = "This command can reach the network or send things away from this Mac, so TBD asks every time.";
+const R_ARGS = "Always allow is only for commands that just look at things. This command has an option that can write, run or change something, so TBD asks every time.";
 
 /** Command words that delete, move or change things, or raise rights: no "Always allow" when one is any word of the command. */
 const DESTRUCTIVE_ANYWHERE = new Set([
@@ -177,6 +181,8 @@ function parseShell(command: string): Parsed {
       end(true);
       continue;
     }
+    // zsh glob qualifiers and extended globs run code or hide words: `*(e:'cmd':)`, `?(a)`, `+(a)`, `@(a)`, `!(a)`.
+    if (ch === "(" && (cur as Word | null) && i > 0 && /[*?\]+@!]/.test(s[i - 1])) problems.push(R_OPAQUE);
     if (ch === ";" || ch === "(" || ch === ")") { end(false); continue; }
     if (ch === "#" && !cur) { while (i + 1 < s.length && s[i + 1] !== "\n") i++; continue; }
     if (ch === "{") {
@@ -253,11 +259,135 @@ function commandVerdict(words: Word[], c: number, afterPipe: boolean, first: boo
   }
 }
 
+
+// ---------------------------------------------------------------- the allow-list (dev.17 review B1, B2)
+
+/**
+ * "Always allow" for a shell command is an ALLOW-LIST: the rule is the exact command text, so it may only be offered for a line
+ * in which every command is a known command that just looks at things, with arguments that cannot write, run or change
+ * anything. Everything else (a script runner, a package manager, a network tool, an archiver, anything that writes, a path to a
+ * file) is asked every time. The destructive and opaque refusals above stay as a second layer.
+ *
+ * Known limit: `git status`, `git diff` and the like read the repository's own configuration (core.fsmonitor, diff drivers), which a
+ * file in the repository can set. Writing such a file is a file write that asks on its own.
+ *
+ * Known limit: the allow-list trusts the command NAME on this Mac's PATH (`ls` is the system's `ls`). The agent's shell does not
+ * take PATH or other loader variables from the command line (a prefix assignment never gets Always), and a command word with a
+ * "/" other than the system folders is a file the agent can change, so it never gets Always either.
+ */
+const SHELL_WORDS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "busybox"]);
+/** Script runners, build tools and wrappers that run code from files the agent can change. */
+const RUNNER_NAME = /^(npm|npx|pnpm|pnpx|yarn|node|nodejs|deno|bun|bunx|tsx|ts-node|tsc|python[0-9.]*|pip[0-9.]*|pipx|uv|ruby|gem|bundle|rake|perl|php|lua|swift|swiftc|swift-build|make|gmake|cmake|ninja|cargo|rustc|go|java|javac|gradle|mvn|xcodebuild|xcrun|sandbox-exec|chroot|login|busybox)$/;
+
+/** Network tools: asked every time with their own sentence. */
+const NETWORK_NAME = /^(curl|wget|scp|sftp|ftp|nc|ncat|netcat|telnet|ssh|rsync|http|httpie|aria2c|mosh|socat|nmap|ping|traceroute|dig|nslookup|git-lfs)$/;
+const GIT_NETWORK = /^(fetch|pull|push|clone|lfs|remote|ls-remote|submodule|archive|send-email|request-pull)$/;
+
+type ArgCheck = (args: string[]) => string | null;
+const argsOk: ArgCheck = () => null;
+const refuseIf = (test: (arg: string) => boolean): ArgCheck => (args) => (args.some(test) ? R_ARGS : null);
+/** A short option cluster such as `-rno` (not a long option). */
+const shortCluster = (arg: string): boolean => /^-[^-]/.test(arg);
+
+/** `git branch` that only lists: no name to create, no delete, move, copy, upstream or description option. */
+function gitBranchListOnly(rest: string[]): string | null {
+  const listing = rest.some((a) => a === "--list" || (shortCluster(a) && /^-[A-Za-z]*l[A-Za-z]*$/.test(a)));
+  const SPACED = /^--(contains|no-contains|merged|no-merged|points-at|sort|format)$/;
+  const EQUALS = /^--(contains|no-contains|merged|no-merged|points-at|sort|format|abbrev|color|column)$/;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a.startsWith("--") && a.includes("=")) { if (!EQUALS.test(a.slice(0, a.indexOf("=")))) return R_ARGS; continue; }
+    if (SPACED.test(a)) { i++; continue; }
+    if (/^(--list|--all|--remotes|--verbose|--show-current|--no-color|--color|--no-column|--column|--ignore-case|--no-abbrev|--omit-empty|--)$/.test(a) || /^-[arvli]+$/.test(a)) continue;
+    if (a.startsWith("-")) return R_ARGS;
+    if (!listing) return R_ARGS; // a name without --list creates a branch
+  }
+  return null;
+}
+
+/** The read-only `git` subcommands (status, diff, log, show, branch to list, rev-parse, remote -v, blame, ls-files, grep). */
+function gitListed(args: string[]): string | null {
+  let i = 0;
+  for (; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-C") { i++; if (i >= args.length) return R_ARGS; continue; }
+    if (a === "--no-pager" || a === "--no-optional-locks") continue;
+    if (a.startsWith("-")) return R_ARGS; // -c (config can name programs), --git-dir, --work-tree, --exec-path, a pager
+    break;
+  }
+  const sub = args[i];
+  if (!sub) return R_ARGS;
+  const rest = args.slice(i + 1);
+  // Options that write a file, run a program or open an editor, whatever the subcommand.
+  if (rest.some((a) => /^--(output|ext-diff|open-files-in-pager|exec|upload-pack|receive-pack)(=|$)/.test(a) || a === "-o" || (a.startsWith("-O") && !a.startsWith("--")))) return R_ARGS;
+  switch (sub) {
+    case "status": case "diff": case "log": case "show": case "rev-parse": case "blame": case "ls-files": case "grep": return null;
+    case "branch": return gitBranchListOnly(rest);
+    case "remote": return rest.length === 0 || (rest.length === 1 && (rest[0] === "-v" || rest[0] === "--verbose")) ? null : R_ARGS;
+    default: return GIT_NETWORK.test(sub) ? R_NETWORK : R_NOT_LISTED; // anything that writes, and every network command
+  }
+}
+
+/** The commands that only look at things, and what to check in their arguments. */
+const READ_ONLY: Readonly<Record<string, ArgCheck>> = {
+  ls: argsOk, pwd: argsOk, cat: argsOk, head: argsOk, tail: argsOk, wc: argsOk, grep: argsOk, egrep: argsOk, fgrep: argsOk,
+  stat: argsOk, du: argsOk, df: argsOk, which: argsOk, whoami: argsOk, basename: argsOk, dirname: argsOk, realpath: argsOk,
+  cut: argsOk, tr: argsOk, diff: argsOk, cmp: argsOk, echo: argsOk, printf: argsOk,
+  // ripgrep can run a program per file (--pre) or a decompressor (-z).
+  rg: refuseIf((a) => /^--(pre|hostname-bin|search-zip)(=|$)/.test(a) || (shortCluster(a) && /^-[A-Za-z]*z/.test(a))),
+  file: refuseIf((a) => a === "--compile" || (shortCluster(a) && /^-[A-Za-z]*C/.test(a))),
+  uname: refuseIf((a) => a === "-S"),
+  env: (args) => (args.every((a) => /^(-0|--null|-i|--ignore-environment|-)$/.test(a)) ? null : R_ARGS), // env with no command to run
+  find: refuseIf((a) => /^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/.test(a)),
+  sort: refuseIf((a) => a === "--output" || a.startsWith("--output=") || a.startsWith("--compress-program") || a.startsWith("--temporary-directory") || (shortCluster(a) && /^-[A-Za-z0-9,.]*[oT]/.test(a))),
+  uniq: (args) => {
+    let positional = 0;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === "-f" || a === "-s" || a === "-w") { i++; continue; }
+      if (!a.startsWith("-") || a === "-") positional++;
+    }
+    return positional > 1 ? R_ARGS : null; // the second file name is where uniq writes
+  },
+  date: (args) => {
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === "--set" || a.startsWith("--set=") || (shortCluster(a) && /^-[A-Za-z]*s/.test(a))) return R_ARGS;
+      if (a === "-d" || a === "-r" || a === "-f" || a === "-z") { i++; continue; }
+      if (!a.startsWith("-") && !a.startsWith("+")) return R_ARGS; // a bare number sets the clock on macOS
+    }
+    return null;
+  },
+  git: gitListed,
+};
+
+/** A command word, or null when it is a path to a file. Bare names and the system folders only. */
+function listedCommandName(text: string): string | null {
+  if (!text.includes("/")) return text;
+  return /^\/(?:usr\/)?s?bin\/([A-Za-z0-9._+-]+)$/.exec(text)?.[1] ?? null;
+}
+
+/** Why one simple command does not get "Always allow" (null: it is on the allow-list with safe arguments). */
+function listedVerdict(words: Word[]): string | null {
+  const first = words[0];
+  if (CLAUSE_STARTS.has(first.text) || HEADER_STARTS.has(first.text)) return R_NOT_LISTED;
+  if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(first.text)) return R_OPAQUE; // a variable set in front of the command
+  const name = listedCommandName(first.text);
+  if (name === null) return R_RUNNER; // a path: it runs a file
+  const args = words.slice(1).map((w) => w.text);
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "--help")) return null;
+  const check = READ_ONLY[name];
+  if (!check) return RUNNER_NAME.test(name) ? R_RUNNER : NETWORK_NAME.test(name) ? R_NETWORK : R_NOT_LISTED;
+  return check(args);
+}
+
 /**
  * Whether a shell command may get "Always allow". Pure. No when the command can delete, move or change things, runs as an
  * administrator, changes settings of this Mac, writes to a file by redirection, runs text it builds or fetches at run time
  * (command substitution, a variable, `eval`, a shell fed by a pipe or by `-c`, an interpreter with inline code, `xargs`, `ssh`), contains
- * characters the card cannot show, or is too long. Otherwise yes: the rule is the exact command text, nothing else.
+ * characters the card cannot show, or is too long. Then the allow-list decides: yes only when every command of the line is a known
+ * command that just looks at things (`ls`, `cat`, `grep`, `git status`, ...) with arguments that cannot write or run anything.
+ * The rule is the exact command text, nothing else.
  */
 export function shellAlways(command: string): ShellVerdict {
   const text = command.trim();
@@ -288,6 +418,17 @@ export function shellAlways(command: string): ShellVerdict {
     // After a wrapper ("nice -n 10 git push", "timeout 5 bash -c …") every later word could be the command: look at each.
     const candidates = WRAPPERS.has(first) ? Array.from({ length: words.length - k - 1 }, (_, n) => k + 1 + n) : [];
     const verdict = commandVerdict(words, k, seg.afterPipe, true) ?? candidates.map((c) => commandVerdict(words, c, seg.afterPipe, false)).find((v) => v !== null) ?? null;
+    if (verdict) return { always: false, reason: verdict };
+  }
+  // The allow-list (above): every command of the line must be a known command that just looks at things.
+  for (const seg of parsed.segments) {
+    for (const w of seg.words) {
+      // `=cmd` is zsh for the path of cmd; a shell word anywhere is a shell that may be fed text.
+      if (w.text.startsWith("=") || SHELL_WORDS.has(nameOf(w))) return { always: false, reason: R_OPAQUE };
+    }
+  }
+  for (const seg of parsed.segments) {
+    const verdict = listedVerdict(seg.words);
     if (verdict) return { always: false, reason: verdict };
   }
   return { always: true };
@@ -374,6 +515,7 @@ function planTarget(input: Record<string, unknown>, today: () => string): LocalT
 const R_WEB_MAC = "This address is on this Mac.";
 const R_WEB_LAN = "This address is on your own network.";
 const R_WEB_IP = "This address is a number, so TBD cannot tell what is behind it.";
+const R_WEB_NAME = "This name is one that is often used for devices on your own network, so TBD cannot tell what is behind it.";
 const R_WEB_USER = "This address has a user name or password in it.";
 const R_WEB_PORT = "This address uses a special port.";
 
@@ -409,7 +551,14 @@ function ipv6Kind(bracketed: string): "mac" | "lan" | "public" {
   return "public";
 }
 
+/** Name endings used for private networks, and public names that point to a private address on purpose (nip.io, sslip.io, localtest.me). */
+const PRIVATE_NAME_SUFFIXES = [".lan", ".internal", ".home.arpa", ".corp", ".intranet", ".localdomain", ".nip.io", ".sslip.io", ".localtest.me"];
+
 /**
+ * Known limit: Always allow follows the NAME. A name that anyone can point at a private address (a DNS record) looks like any other
+ * name, and TBD does not look the name up. The card says so. The endings above are the names that are meant for private
+ * networks; every other name stays with the person's Always.
+ *
  * No "Always allow" (ask every time) for a web address that is on this Mac or the person's own network, is a bare IP number, has a
  * user name or password in it, or uses a port other than the default. An "Always" for a host name would otherwise carry over to
  * a request that reaches something else: a local service, a router, an admin page, or one that sees a login.
@@ -429,6 +578,8 @@ export function webAlwaysVerdict(url: URL): WebVerdict {
     return kind === "mac" ? mac(R_WEB_MAC) : lan(kind === "lan" ? R_WEB_LAN : R_WEB_IP);
   }
   if (host.endsWith(".local") || !host.includes(".")) return lan(R_WEB_LAN); // Bonjour names and one-word names (a router, a NAS)
+  // Names that are made for the home or office network, or that always point to a private address (dev.17 review S7).
+  if (PRIVATE_NAME_SUFFIXES.some((suffix) => host.endsWith(suffix)) || host === "localtest.me" || host.startsWith("localhost.")) return lan(R_WEB_NAME);
   if (url.username !== "" || url.password !== "") return lan(R_WEB_USER);
   if (url.port !== "") return lan(R_WEB_PORT);
   return { always: true };
@@ -534,7 +685,7 @@ export function buildLocalCard(target: LocalTarget): LocalCard {
       title: `Allow TBD's agent to fetch from ${host}?`, label: "Address", text, ...(cut ? { cut } : {}), leavesMac: leaves,
       // No Always: say why (this address is on this Mac or your network, has a login in it, ...); the every-time line is the hint.
       note: offered ? leaveLine : `${target.why ?? ""}${leaves ? ` ${leaveLine}` : ""}`.trim(),
-      ...(offered ? { scope: `Always allow covers fetching from ${host} only.` } : {}), ...base,
+      ...(offered ? { scope: `Always allow covers fetching from ${host} only. TBD cannot see where a name points: it can point to a device on your own network.` } : {}), ...base,
     };
   }
   if (target.kind === "plan") {

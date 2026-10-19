@@ -18,6 +18,7 @@ let package = Package(
       path: "Sources/TBDFlowShared",
       sources: [
         "TBDAppIdentity.swift",
+        "TBDRealDataGuard.swift",
         "TBDFlowModels.swift",
         "TBDFlowStore.swift",
         "TBDFlowPlanParser.swift",
