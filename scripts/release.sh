@@ -48,6 +48,15 @@ if ps -axo comm | /usr/bin/grep -Fxq "$APP/Contents/MacOS/TBD"; then
 fi
 mkdir -p "$LOGS" "$DIST"
 
+# DayflowTests need macOS + Xcode; the Woodpecker pipeline is linux/amd64 only (frozen template), so this release
+# gate is where the suite runs. A red suite stops the release. Ad-hoc signed Debug build, its own derived data.
+step "Gate: DayflowTests (log: $LOGS/dayflow-tests.log)"
+xcodebuild test -project "$TBD_ROOT/companion/Dayflow/Dayflow.xcodeproj" -scheme Dayflow \
+  -derivedDataPath "$TBD_ROOT/companion/build.noindex" -skipMacroValidation -skipPackagePluginValidation \
+  -only-testing:DayflowTests ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= > "$LOGS/dayflow-tests.log" 2>&1 \
+  || die "DayflowTests failed; see $LOGS/dayflow-tests.log"
+
 step "Assemble (chat, app, tbd-listen, helpers; logs: $LOGS)"
 rm -rf "$APP"
 source "$TBD_ROOT/scripts/assemble.sh"

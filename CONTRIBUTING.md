@@ -32,7 +32,15 @@ cd chat
 npm run typecheck && npm test && npm run lint
 ```
 
-Swift tests (`native/Tests`, `tests/`, `companion/Dayflow/DayflowTests`) are run by hand on a Mac (command not documented in the repo: UNVERIFIED). They are not in CI.
+Swift tests need macOS + Xcode. The Woodpecker pipeline is Linux only, so they are not in CI. Run them on a Mac:
+
+```sh
+cd native && swift test
+xcodebuild test -project companion/Dayflow/Dayflow.xcodeproj -scheme Dayflow -derivedDataPath companion/build.noindex \
+  -only-testing:DayflowTests ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=
+```
+
+`scripts/release.sh` runs DayflowTests first and stops on a failure.
 
 ## Releasing
 
