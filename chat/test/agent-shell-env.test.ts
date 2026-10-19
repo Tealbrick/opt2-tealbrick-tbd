@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,7 +55,7 @@ test("S2: a shell command of TBD's agent sees no model key; the relay keeps its 
       const main = (body.tools ?? []).some((t) => t.name === "Bash");
       if (!body.stream) { res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: "m", type: "message", role: "assistant", model: "claude-test", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } })); return; }
       if (main && !results.includes("tool_result")) {
-        sse(res, message([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "env", description: "Print the environment" } }], "tool_use"));
+        sse(res, message([{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "env; echo __END_OF_ENV__", description: "Print the environment" } }], "tool_use"));
       } else {
         if (results.includes("tool_result")) shellOutput = results;
         sse(res, message([{ type: "text", text: "done" }], "end_turn"));
@@ -66,7 +66,15 @@ test("S2: a shell command of TBD's agent sees no model key; the relay keeps its 
   const port = (server.address() as { port: number }).port;
   const dir = mkdtempSync(join(tmpdir(), "tbd-shell-env-"));
   const relayEnvFile = join(dir, "relay-env.json");
-  const relayEnv = { PATH: "/usr/bin:/bin", HOME: process.env.HOME ?? "", TB_SIGNER_SOCKET: join(dir, "signer.sock"), TB_BRIDGE_URL: "https://bridge.example.com", TB_CONNECTION_ID: "conn_7f3a9c2e1b4d", TB_AGENT_ID: "agt_2b8e41", TB_BRIDGE_ID: "brg_91c0aa" };
+  // Realistic shapes: the scrub also matches "by the shape of its value", so ids must look like real ones (UUIDs, long
+  // random strings), not short fakes.
+  // Fixed, production-shaped values, so a failure reproduces (review dev.11 #11).
+  const relayEnv = {
+    PATH: "/usr/bin:/bin", HOME: process.env.HOME ?? "",
+    TB_SIGNER_SOCKET: "/var/folders/lw/lnvs417x6654wh8s79skzx200000gn/T/tbd-1f0c9e7a2b/signer.sock",
+    TB_BRIDGE_URL: "https://bridge-7f3a9c2e.tealbrick.com", TB_CONNECTION_ID: "01928f3e-7c2a-7b4d-9e1f-3a6c8d2b5e70",
+    TB_AGENT_ID: "agt_01JAB3XK7Q9M2Z5R8T4W6Y0C1D", TB_BRIDGE_ID: "brg_Zx3Q9vK2mP7tL5nR8wB1cF4hJ6yD0aE3sG9uI2oT5kM",
+  };
   const agent = createDefaultAgent({
     node: process.execPath, entry: agentEntry,
     model: async () => ({ model: "claude-test", baseUrl: `http://127.0.0.1:${port}`, secretEnv: KEYS }),
@@ -83,12 +91,15 @@ test("S2: a shell command of TBD's agent sees no model key; the relay keeps its 
     agent.stop();
     server.close();
   }
+  const relayRaw = existsSync(relayEnvFile) ? readFileSync(relayEnvFile, "utf8") : "{}";
+  rmSync(dir, { recursive: true, force: true }); // the test's own temp folder
   assert.ok(shellOutput.includes("PATH="), `the Bash call ran and printed its environment: ${shellOutput.slice(0, 400)}`);
+  assert.ok(shellOutput.includes("__END_OF_ENV__"), "the whole environment was printed (no truncation hid a key)");
   for (const [name, value] of Object.entries(KEYS)) {
     assert.equal(shellOutput.includes(value), false, `${name} reached the shell`);
     assert.equal(shellOutput.includes(`${name}=`), false, `${name} is set in the shell`);
   }
-  const relay = JSON.parse(readFileSync(relayEnvFile, "utf8")) as Record<string, string>;
+  const relay = JSON.parse(relayRaw) as Record<string, string>;
   for (const [name, value] of Object.entries(relayEnv)) if (name.startsWith("TB_")) assert.equal(relay[name], value, `relay kept ${name}`);
   for (const value of Object.values(KEYS)) assert.equal(Object.values(relay).includes(value), false, "no model key in the relay's environment");
 });

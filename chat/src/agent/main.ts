@@ -6,7 +6,7 @@ import { buildOptions, BRIDGE_SERVER_NAME, BRIDGE_TOOL_PATTERN } from "@opt2-tea
 import { AGENT_TOOLS, ASK_TOOL, describeToolCall, needsPermission, type AgentConfig, type AgentQuestion, type AgentToHelper, type HelperToAgent } from "./protocol";
 import type { ContentBlock } from "../shared/message";
 import { listeningServer } from "./listeningTools";
-import { modelEnv, MODEL_SECRET_NAMES } from "./modelEnv";
+import { modelEnv } from "./modelEnv";
 
 /**
  * TBD's default agent process (C24): the Claude Agent SDK harness with the
@@ -70,16 +70,16 @@ function options(c: AgentConfig, id: string, abort: AbortController, sessionId?:
     // Available built-ins; none is auto-allowed: every call goes through canUseTool (SEC-04).
     tools: AGENT_TOOLS,
     pathToClaudeCodeExecutable: c.claudeExecutable,
-    // S2 (dev.11): the agent's own shell must never read the person's model key. The sandbox unsets each model key
-    // name for every sandboxed command (sdk.d.ts `sandbox.credentials.envVars`, mode "deny"; TBD runs no command
-    // unsandboxed), and the subprocess scrub below removes credentials from Bash, hooks and stdio MCP servers.
-    ...(c.sandbox ? { sandbox: { ...c.sandbox, credentials: { envVars: [...MODEL_SECRET_NAMES].map((name) => ({ name, mode: "deny" })) } } as Options["sandbox"] } : {}),
+    ...(c.sandbox ? { sandbox: c.sandbox as Options["sandbox"] } : {}),
     env: {
       ...base.env,
       // The harness's own state, isolated from the person's Claude setup.
       CLAUDE_CONFIG_DIR: join(c.stateDir, "claude"),
-      // code.claude.com/docs/en/env-vars ("What the subprocess environment scrub removes"): strips credentials from
-      // the environments of Bash commands, hooks and stdio MCP servers; Claude Code keeps them for its own API calls.
+      // S2 (dev.11): the agent's own shell must never read the person's model key. code.claude.com/docs/en/env-vars
+      // ("What the subprocess environment scrub removes"): strips credentials from the environments of Bash commands,
+      // hooks and stdio MCP servers; Claude Code keeps them for its own API calls. Proven by
+      // test/agent-shell-env.test.ts. (The sandbox's `credentials.envVars` deny alone did not keep the key out in TBD's
+      // agent path in that test, cause not explained — a direct SDK call honoured it; the scrub alone is proven here.)
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
       ...modelEnv(c.model, process.env),
     },

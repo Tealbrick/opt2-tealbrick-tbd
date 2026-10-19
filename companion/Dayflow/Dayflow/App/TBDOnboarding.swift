@@ -36,8 +36,14 @@ final class TBDOnboardingController: ObservableObject {
   @Published private(set) var pairError = ""
   /// Step 2, cloud (WP-HARNESS step 1, C287 (1)): the person's own Bedrock / Vertex AI / Foundry setting.
   let cloudStore = TBDAgentCloudStore()
-  @Published var cloud = TBDAgentCloud(provider: .bedrock, model: TBDAgentCloudProvider.bedrock.exampleModel, region: "us-east-1")
-  @Published var cloudKey = ""
+  @Published var cloud = TBDAgentCloud(provider: .bedrock, model: TBDAgentCloudProvider.bedrock.exampleModel, region: "us-east-1") {
+    didSet { if cloud != oldValue && !loadingCloud { cloudEdited = true } }
+  }
+  @Published var cloudKey = "" { didSet { if !cloudKey.isEmpty { cloudEdited = true } } }
+  /// The person changed a cloud field (or chose a provider/typed a key) since it was last saved or loaded. Only then
+  /// does Next save (review dev.11 #1: looking at the defaults must never replace a working route).
+  @Published private(set) var cloudEdited = false
+  private var loadingCloud = false
   @Published private(set) var cloudMessage: String?
   /// Whether a key for the shown provider is in the Keychain (read when the panel shows, after Save and Remove).
   @Published private(set) var cloudKeyStored = false
@@ -47,7 +53,7 @@ final class TBDOnboardingController: ObservableObject {
   var cloudSaved: Bool { cloudStore.isActive && cloudStore.load() == cloud }
   /// Typed, complete cloud fields that are not saved yet: Next saves them (review dev.10 #6b).
   var cloudReadyToSave: Bool {
-    agentRuntime == .cloud && agentAnswer == .yes && !cloudSaved
+    agentRuntime == .cloud && agentAnswer == .yes && cloudEdited && !cloudSaved
       && cloud.missing(hasKey: !cloudKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || cloudKeyStored) == nil
   }
   /// Ollama on this Mac: status for the agent's model (after a test) and for the Companion's recommended model.
@@ -92,7 +98,7 @@ final class TBDOnboardingController: ObservableObject {
       agentRuntime = local ? .local : .apiKey
       agentModel = route.model
     }
-    if let saved = cloudStore.load() { cloud = saved }
+    if let saved = cloudStore.load() { loadingCloud = true; cloud = saved; loadingCloud = false }
     if cloudStore.isActive { agentRuntime = .cloud }
     if let runtime = machine.record.choices.agentRuntime, runtime != .subscription { agentRuntime = runtime }
     if preview { return }
@@ -235,13 +241,16 @@ final class TBDOnboardingController: ObservableObject {
     if target < step {
       while step > target { machine.back() }
     } else if target > step {
-      if step == .agent && cloudReadyToSave && saveCloudNow() {
+      if step == .agent && cloudReadyToSave {
+        // A failed save stays on the step with its message (review dev.11 #2).
+        guard saveCloudNow() else { return }
         // The saved route resolves; count it at once so Forward does not wait for the next check.
         var c = checks
         c.agentModelReady = true
         c.agentModelName = cloud.model.trimmingCharacters(in: .whitespacesAndNewlines)
         c.agentCloud = cloud.provider.title
         checks = c
+        agentCheckDue = true
       }
       if !isDone(step) { skip(step) }
       machine.forward(checks)
@@ -419,6 +428,7 @@ final class TBDOnboardingController: ObservableObject {
     do {
       try cloudStore.save(cloud, key: typed)
       cloudKey = ""
+      cloudEdited = false
       cloudMessage = nil
       refreshCloudKey()
       machine.update { $0.agent = .yes; $0.agentRuntime = .cloud }
@@ -449,6 +459,7 @@ final class TBDOnboardingController: ObservableObject {
 
   func chooseCloud(_ provider: TBDAgentCloudProvider) {
     guard provider != cloud.provider else { return }
+    cloudEdited = true
     cloud = cloudStore.load().flatMap { $0.provider == provider ? $0 : nil }
       ?? TBDAgentCloud(provider: provider, model: provider.exampleModel, region: provider == .vertex ? "us-east5" : provider == .bedrock ? "us-east-1" : "")
     cloudKey = ""
@@ -563,7 +574,9 @@ struct TBDOnboardingView: View {
     [
       TBDStep("Welcome", nextLabel: "Start") { welcome },
       TBDStep("Workspace", nextLabel: nextLabel, optional: true, skipLabel: "No, not now", canAdvance: flow.isDone(.portal)) { portal },
-      TBDStep("TBD's agent", nextLabel: flow.cloudReadyToSave ? "Save and continue" : nextLabel, optional: true, skipLabel: "No, not now",
+      // While typed cloud fields wait to be saved, the only way forward is "Save and continue"; "No" is the tile above
+      // (the kit's StepFlow sends Next and Skip through the same path, review dev.11 #1).
+      TBDStep("TBD's agent", nextLabel: flow.cloudReadyToSave ? "Save and continue" : nextLabel, optional: !flow.cloudReadyToSave, skipLabel: "No, not now",
               canAdvance: flow.isDone(.agent) || flow.cloudReadyToSave) { agent },
       TBDStep("Permissions", nextLabel: nextLabel, optional: true, skipLabel: "Not now", canAdvance: flow.isDone(.permissions)) { permissionsStep },
       TBDStep("Models", nextLabel: nextLabel, optional: true, skipLabel: "Skip for now", canAdvance: flow.isDone(.models)) { models },
