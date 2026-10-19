@@ -100,6 +100,8 @@
       NSApplication.shared.setActivationPolicy(.prohibited)
       let seeded = DemoSeed.seed()
       let flow = FlowShotsSeed.planner()
+      let observerShots = FlowShotsSeed.observerScreens()
+      defer { observerShots.cleanUp() }
       // Creates the Listening context on the demo root (no start: no capture, hotkeys, downloads), so Settings → Listen
       // pages render their real content.
       _ = TBDListeningRuntime.shared.previewSettings(section: "capture")
@@ -137,10 +139,17 @@
         }
         try render(StatusMenuView(dismissMenu: {}), size: CGSize(width: 320, height: 640), dark: dark, name: "menu-\(theme)")
         // Flow (F2): the local Today page on a seeded store, the observer placeholder and the nudge preview.
-        for (tab, name) in [(FlowTab.today, "today"), (.observer, "observer"), (.nudge, "nudge")] {
+        for (tab, name) in [(FlowTab.today, "today"), (.nudge, "nudge")] {
           try render(
             FlowView(planner: flow, tab: tab, showsTasklistImport: true).background(TBDColor.tile), size: main, dark: dark,
             name: "flow-\(name)-\(theme)")
+        }
+        // The Observer tab (F3): text on this Mac (the mockup), a local vision model that is not downloaded yet, a cloud model.
+        for screen in observerShots.screens {
+          try render(
+            FlowView(planner: flow, tab: .observer, showsTasklistImport: true, observer: screen.agent, observerModel: screen.model)
+              .background(TBDColor.tile),
+            size: main, dark: dark, name: "flow-observer\(screen.suffix)-\(theme)")
         }
         // The debug card open (its Overlay tab), so its controls are in the contrast audit too.
         try render(
@@ -225,6 +234,55 @@
   /// done, one "Now" with a running focus timer. The clock stands still at 10:18, so the page is the same on every run.
   @MainActor
   private enum FlowShotsSeed {
+    struct ObserverScreen {
+      let suffix: String
+      let agent: FlowDistractionAgent
+      let model: FlowObserverModel
+    }
+    /// The Observer tab in three states (text on this Mac like the mockup, a vision model not downloaded yet, a cloud
+    /// model), each on its own defaults suite and an in-memory key store, with a fixed model list: no network, no Keychain,
+    /// no real settings.
+    struct ObserverScreens {
+      let screens: [ObserverScreen]
+      let suiteNames: [String]
+      func cleanUp() { suiteNames.forEach { UserDefaults.standard.removePersistentDomain(forName: $0) } }
+    }
+
+    static func observerScreens() -> ObserverScreens {
+      var suites: [String] = []
+      func screen(_ suffix: String, _ prepare: (TBDFlowObserverSetup, TBDModelRegistry) throws -> Void) -> ObserverScreen {
+        let name = "tbd.design-shots.flow-observer.\(UUID().uuidString)"
+        suites.append(name)
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        let registry = TBDModelRegistry(defaults: defaults, credentials: TBDMemorySecretStore())
+        let setup = TBDFlowObserverSetup(registry: registry, defaults: defaults)
+        do { try prepare(setup, registry) } catch { print("tbd design shots: observer seed failed: \(error)") }
+        setup.watching = true
+        let agent = FlowDistractionAgent(setup: setup, defaults: defaults, schedulesTimer: false)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let at1042 = calendar.date(bySettingHour: 10, minute: 42, second: 0, of: today) ?? today
+        var counters = FlowObserverCounters(day: TBDFlowDay.string(from: Date(), calendar: calendar))
+        counters.checks = 312
+        counters.nudges = 3
+        counters.snoozes = 1
+        agent.showPreview(lastCheckAt: at1042, offTask: false, counters: counters)
+        let model = FlowObserverModel(
+          setup: setup, installedModels: { ["llama3.2:3b", "gpt-oss:20b"] }, reconfigure: {})
+        return ObserverScreen(suffix: suffix, agent: agent, model: model)
+      }
+      let screens = [
+        screen("") { setup, _ in try setup.chooseLocal(.textLocal, model: "llama3.2:3b") },
+        screen("-vision") { setup, _ in try setup.chooseLocal(.visionLocal, model: TBDFlowObserverSetup.defaultVisionModel) },
+        screen("-cloud") { setup, registry in
+          let connection = TBDModelConnection(name: "Anthropic", endpoint: "https://api.anthropic.com", kind: .anthropic)
+          try registry.saveConnection(connection, apiKey: "demo-key-not-real")
+          try setup.chooseCloud(connectionID: connection.id, model: "claude-opus-5-5")
+        },
+      ]
+      return ObserverScreens(screens: screens, suiteNames: suites)
+    }
+
     private final class Clock: @unchecked Sendable { var date: Date; init(_ d: Date) { date = d } }
 
     static func planner() -> FlowPlanner {

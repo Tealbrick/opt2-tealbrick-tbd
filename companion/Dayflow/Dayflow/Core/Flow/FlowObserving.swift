@@ -2,8 +2,8 @@
 //  FlowObserving.swift
 //  TBD
 //
-//  The seam between the session mirror and the screen observer. Slice F2 ships only the protocol and a no-op
-//  implementation; slice F3 plugs the real observer (`FlowDistractionAgent`) into `FlowSessionMirror.observer`.
+//  The seam between the session mirror and the screen observer. The real observer is `FlowDistractionAgent`
+//  (slice F3), plugged into `FlowSessionMirror` with `setObserver`.
 //
 
 import Foundation
@@ -25,13 +25,16 @@ protocol FlowObserving: AnyObject {
   func goalsChanged(to snapshot: FlowNativeSnapshot)
   /// A person's reply to a nudge, as a note for the model. `markRefocused` tells the observer the person is back on task.
   func noteUserEvent(_ note: String, markRefocused: Bool)
+  /// The person snoozed a nudge (the Today card counts it).
+  func userSnoozed()
 }
 
 extension FlowObserving {
+  func userSnoozed() {}
   func noteUserEvent(_ note: String) { noteUserEvent(note, markRefocused: false) }
 }
 
-/// The default observer until F3: it watches nothing.
+/// The default observer until the real one is plugged in: it watches nothing.
 @MainActor
 final class FlowNoObserver: FlowObserving {
   var status: String { "Observer: not set up yet" }

@@ -151,7 +151,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Not in the XCTest host: tests build their own planner on a temp folder.
     if !TBDOnboardingController.isTestHost {
       FlowOverlayController.shared.start()
+      // The observer is off until the person turns it on (Flow › Observer). Plug it in before the planner starts a session.
+      FlowSessionMirror.shared.setObserver(FlowDistractionAgent.shared)
       FlowPlanner.shared.start()
+      FlowCardLabeller.shared.start()
     }
 
 

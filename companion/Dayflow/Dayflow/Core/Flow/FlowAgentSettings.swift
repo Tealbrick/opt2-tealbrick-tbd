@@ -4,7 +4,7 @@
 //
 //  The Flow companion knobs that are still being tuned, in one UserDefaults-backed object the debug panel edits live:
 //  how often the observer looks, what it is told, and how the overlay behaves. Port of v1 without the model and
-//  reasoning settings (TBD picks the observer's model itself, slice F3).
+//  reasoning settings: the observer's model, mode and switch live in `TBDFlowObserverSetup` (Flow › Observer).
 //
 
 import Combine
@@ -15,11 +15,17 @@ final class FlowAgentSettings: ObservableObject {
   static let shared = FlowAgentSettings()
 
   static let screenshotHeights = [480, 720, 1080]
+  static let alertStyleKey = "flowAlertStyle"
+
+  /// The saved alert style (friendly until the person chooses).
+  static func savedAlertStyle(_ defaults: UserDefaults) -> FlowAlertStyle {
+    defaults.string(forKey: alertStyleKey).flatMap(FlowAlertStyle.init(rawValue:)) ?? .friendly
+  }
 
   // MARK: Agent
 
-  /// Master switch: off means sessions run with no screen watching at all.
-  @Published var agentEnabled: Bool { didSet { set(agentEnabled, "flowAgentEnabled") } }
+  /// Quiet, Friendly or Feisty: how often the observer nudges. The planner puts it into the session.
+  @Published var alertStyle: FlowAlertStyle { didSet { set(alertStyle.rawValue, Self.alertStyleKey) } }
   /// Seconds between checks.
   @Published var tickSeconds: Double { didSet { set(tickSeconds, "flowAgentTickSeconds") } }
   /// Screenshot height in pixels (width follows the display's aspect).
@@ -27,8 +33,6 @@ final class FlowAgentSettings: ObservableObject {
   @Published var jpegQuality: Double { didSet { set(jpegQuality, "flowAgentJpegQuality") } }
   /// Consecutive failed turns before the observer gives up for the session.
   @Published var maxFailures: Int { didSet { set(maxFailures, "flowAgentMaxFailures") } }
-  /// Send the text of the screen instead of the image (for text-only models).
-  @Published var textOnly: Bool { didSet { set(textOnly, "flowAgentTextOnly") } }
   /// Per-check timeout.
   @Published var tickTimeoutSeconds: Double {
     didSet { set(tickTimeoutSeconds, "flowAgentTickTimeout") }
@@ -63,7 +67,7 @@ final class FlowAgentSettings: ObservableObject {
 
   init(defaults d: UserDefaults = .standard) {
     defaults = d
-    agentEnabled = d.object(forKey: "flowAgentEnabled") as? Bool ?? true
+    alertStyle = Self.savedAlertStyle(d)
     let tick = d.double(forKey: "flowAgentTickSeconds")
     tickSeconds = tick >= 5 ? tick : 15
     let height = d.integer(forKey: "flowAgentShotHeight")
@@ -72,7 +76,6 @@ final class FlowAgentSettings: ObservableObject {
     jpegQuality = quality > 0 ? quality : 0.6
     let failures = d.integer(forKey: "flowAgentMaxFailures")
     maxFailures = failures > 0 ? failures : 3
-    textOnly = d.bool(forKey: "flowAgentTextOnly")
     let timeout = d.double(forKey: "flowAgentTickTimeout")
     tickTimeoutSeconds = timeout >= 10 ? timeout : 60
     briefingTemplate = d.string(forKey: "flowAgentBriefing") ?? ""
@@ -118,14 +121,12 @@ final class FlowAgentSettings: ObservableObject {
     defaults.set(value, forKey: key)
   }
 
-  /// Back to the built-in values (keeps the nudge variant).
+  /// Back to the built-in values (keeps the nudge variant and the alert style).
   func resetToDefaults() {
-    agentEnabled = true
     tickSeconds = 15
     screenshotHeight = 1080
     jpegQuality = 0.6
     maxFailures = 3
-    textOnly = false
     tickTimeoutSeconds = 60
     briefingTemplate = ""
     extraInstructions = ""

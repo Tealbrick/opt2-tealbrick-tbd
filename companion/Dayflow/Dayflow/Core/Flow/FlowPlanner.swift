@@ -15,7 +15,8 @@ import TBDModels
 final class FlowPlanner: ObservableObject {
   static let shared = FlowPlanner()
 
-  /// UserDefaults key of the observer switch on the Flow page (default on).
+  /// UserDefaults key of the session switch (default on): whether the list becomes a session at all. The observer's own
+  /// switch ("Watch my screen for focus", off until turned on) is `TBDFlowObserverSetup.watching`.
   static let observationKey = "companionObservationEnabled"
 
   let store: TBDFlowStore
@@ -143,7 +144,7 @@ final class FlowPlanner: ObservableObject {
     }
     var snapshot = FlowNativeSnapshot()
     snapshot.phase = .active
-    snapshot.alertStyle = .friendly
+    snapshot.alertStyle = FlowAgentSettings.savedAlertStyle(defaults)
     snapshot.sessionStartedAt = Int(plan.startsAt.timeIntervalSince1970)
     snapshot.sessionEndsAt = Int(plan.endsAt.timeIntervalSince1970)
     snapshot.goals = plan.goals

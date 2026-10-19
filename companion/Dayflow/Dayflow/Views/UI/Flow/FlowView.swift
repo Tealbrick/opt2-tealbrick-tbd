@@ -3,8 +3,8 @@
 //  TBD
 //
 //  The Flow page: today's plan on this Mac, the observer and the nudge preview. Layout follows the approved mockup
-//  (coordination/leads/tbd/flow-mockups-20261019, "today-local"). Slice F2 shows the local list only; the plan-vs-actual
-//  strip is F5 and the Task Board source is F4.
+//  (coordination/leads/tbd/flow-mockups-20261019, "today-local"). The Observer tab is `FlowObserverView` (slice F3); the
+//  plan-vs-actual strip is F5 and the Task Board source is F4.
 //
 
 import SwiftUI
@@ -26,11 +26,18 @@ enum FlowTab: String, CaseIterable {
 struct FlowView: View {
   @ObservedObject var planner: FlowPlanner
   @ObservedObject private var mirror = FlowSessionMirror.shared
+  @ObservedObject private var observer: FlowDistractionAgent
+  @StateObject private var observerModel: FlowObserverModel
   @State private var tab: FlowTab
   private let showsTasklistImport: Bool
 
-  init(planner: FlowPlanner = .shared, tab: FlowTab = .today, showsTasklistImport: Bool = TBDTasklistImport.isAvailable) {
+  init(
+    planner: FlowPlanner = .shared, tab: FlowTab = .today, showsTasklistImport: Bool = TBDTasklistImport.isAvailable,
+    observer: FlowDistractionAgent = .shared, observerModel: FlowObserverModel? = nil
+  ) {
     self.planner = planner
+    self.observer = observer
+    _observerModel = StateObject(wrappedValue: observerModel ?? FlowObserverModel())
     _tab = State(initialValue: tab)
     self.showsTasklistImport = showsTasklistImport
   }
@@ -44,7 +51,7 @@ struct FlowView: View {
         case .today:
           FlowTodayView(planner: planner, showsTasklistImport: showsTasklistImport)
         case .observer:
-          observerPlaceholder
+          FlowObserverView(observer: observer, model: observerModel)
         case .nudge:
           FlowDemoView()
         }
@@ -72,6 +79,11 @@ struct FlowView: View {
     return f.string(from: date)
   }
 
+  private var observerTagStatus: TBDStatus {
+    if observer.status.hasPrefix("Last check") { return .live }
+    return observer.lastError != nil ? .needsYou : .idle
+  }
+
   private var header: some View {
     HStack(alignment: .firstTextBaseline, spacing: TBDKit.s4) {
       VStack(alignment: .leading, spacing: TBDKit.s1) {
@@ -82,22 +94,8 @@ struct FlowView: View {
       Spacer(minLength: 0)
       HStack(spacing: TBDKit.s2) {
         TBDTag("Only on this Mac", status: .idle)
-        TBDTag(mirror.observer.status, status: .idle)
+        TBDTag(observer.status, status: observerTagStatus)
       }
     }
-  }
-
-  // MARK: Observer (slice F3 replaces this)
-
-  private var observerPlaceholder: some View {
-    VStack(alignment: .leading, spacing: TBDKit.s2) {
-      Text("The observer comes in the next step").font(TBDTokens.Typography.title).foregroundStyle(TBDColor.ink)
-      Text("It will check on this Mac if you work on your plan, and nudge you when you drift. Until then you can try the nudges in Nudge preview.")
-        .font(TBDTokens.Typography.hint).foregroundStyle(TBDColor.muted).fixedSize(horizontal: false, vertical: true)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(TBDKit.s4)
-    .background(TBDColor.tile, in: TBDBrickShape())
-    .overlay(TBDBrickShape().strokeBorder(TBDColor.line, lineWidth: TBDKit.hair))
   }
 }

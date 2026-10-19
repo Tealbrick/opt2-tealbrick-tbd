@@ -4,8 +4,8 @@
 //
 //  The tuning card on Flow › Nudge preview: every knob in `FlowAgentSettings` plus buttons that bring the creature in
 //  on demand (side / top / peek), so the companion can be tuned without rebuilding. Port of v1 with the TBD kit
-//  instead of the dark overlay, and without the model and reasoning controls. The agent log and the prompt preview
-//  come back with the observer (slice F3).
+//  instead of the dark overlay, and without the model and reasoning controls (the model is set in Flow › Observer). The
+//  Log tab (what the model said) and the prompt preview work on the real observer.
 //
 
 import SwiftUI
@@ -15,15 +15,20 @@ struct FlowDebugPanel: View {
   @ObservedObject private var settings = FlowAgentSettings.shared
   @ObservedObject private var mirror = FlowSessionMirror.shared
   @ObservedObject private var timeline = FlowSessionTimeline.shared
+  @ObservedObject private var observer: FlowDistractionAgent
   @State private var isOpen: Bool
   @State private var tab: Tab = .overlay
   @State private var toastText = "Nice streak — keep it up!"
 
-  init(startsOpen: Bool = false) { _isOpen = State(initialValue: startsOpen) }
+  init(startsOpen: Bool = false, observer: FlowDistractionAgent = .shared) {
+    _isOpen = State(initialValue: startsOpen)
+    self.observer = observer
+  }
 
   private enum Tab: String, CaseIterable {
     case overlay = "Overlay"
     case agent = "Observer"
+    case log = "Log"
     case prompt = "Prompt"
     case timeline = "Timeline"
   }
@@ -40,6 +45,7 @@ struct FlowDebugPanel: View {
         switch tab {
         case .overlay: overlayForm
         case .agent: agentForm
+        case .log: logList
         case .prompt: promptForm
         case .timeline: timelineList
         }
@@ -58,7 +64,15 @@ struct FlowDebugPanel: View {
 
   private var agentForm: some View {
     VStack(alignment: .leading, spacing: TBDKit.s3) {
-      Toggle(isOn: $settings.agentEnabled) { text("Watch the screen during sessions") }.toggleStyle(TBDSwitchStyle())
+      HStack(spacing: TBDKit.s2) {
+        text(observer.status)
+        Spacer(minLength: 0)
+        Button("Tick now") { observer.tickNow() }
+        Button("Timeline now") { observer.requestTimelineNow() }
+        Button("Restart") { observer.restart() }
+      }
+      .buttonStyle(TBDButtonStyle(.secondary))
+      hint("The switch and the model are in Flow › Observer. A check takes a screenshot and asks the model at once.")
       slider("Every \(Int(settings.tickSeconds)) s", value: $settings.tickSeconds, in: 5...120, step: 5)
       slider(
         "Timeline every \(Int(settings.timelineEverySeconds)) s", value: $settings.timelineEverySeconds, in: 15...300, step: 15)
@@ -67,10 +81,9 @@ struct FlowDebugPanel: View {
           selection: $settings.screenshotHeight, options: FlowAgentSettings.screenshotHeights.map { ($0, "\($0)p") })
       }
       slider(String(format: "JPEG quality %.2f", settings.jpegQuality), value: $settings.jpegQuality, in: 0.3...0.95, step: 0.05)
-      Toggle(isOn: $settings.textOnly) { text("Text only (send the screen's text instead of the image)") }.toggleStyle(TBDSwitchStyle())
       slider("Timeout \(Int(settings.tickTimeoutSeconds)) s", value: $settings.tickTimeoutSeconds, in: 10...180, step: 5)
       Stepper(value: $settings.maxFailures, in: 1...20) { text("Give up after \(settings.maxFailures) failed checks") }
-      hint("Changes apply to the next session the observer starts.")
+      hint("Changes apply when the observer starts again (Restart).")
       Button("Reset to defaults") { settings.resetToDefaults() }.buttonStyle(TBDButtonStyle(.quiet))
     }
   }
@@ -88,7 +101,35 @@ struct FlowDebugPanel: View {
       hint("Empty means the built-in briefing.")
       text("Extra instructions (appended)").font(TBDTokens.Typography.label)
       FlowTextArea(text: $settings.extraInstructions, height: 70, monospaced: true)
-      hint("Prompt changes apply to the next session the observer starts.")
+      hint("Prompt changes apply to the next check.")
+      text("Briefing as it would be sent now").font(TBDTokens.Typography.label)
+      Text(verbatim: observer.currentBriefing)
+        .font(TBDTokens.Typography.mono).foregroundStyle(TBDColor.inkSoft)
+        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  // MARK: Log
+
+  /// What the model said on each turn (newest last), and failed turns.
+  private var logList: some View {
+    VStack(alignment: .leading, spacing: TBDKit.s2) {
+      HStack(spacing: TBDKit.s2) {
+        hint("\(observer.transcript.count) entries. Screen text and screenshots are not logged, only the model's replies.")
+        Spacer(minLength: 0)
+        Button("Clear") { observer.clearTranscript() }.buttonStyle(TBDButtonStyle(.quiet))
+      }
+      if observer.transcript.isEmpty { hint("Nothing yet. The model's replies appear here while the observer runs.") }
+      ForEach(observer.transcript.suffix(40)) { entry in
+        HStack(alignment: .top, spacing: TBDKit.s2) {
+          Text(verbatim: entry.date.formatted(.dateTime.hour().minute().second()))
+            .font(TBDTokens.Typography.mono).foregroundStyle(TBDColor.muted).frame(width: 70, alignment: .leading)
+          Text(verbatim: entry.text).font(TBDTokens.Typography.mono).foregroundStyle(TBDColor.inkSoft)
+            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 0)
+        }
+      }
     }
   }
 

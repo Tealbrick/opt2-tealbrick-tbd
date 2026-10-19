@@ -228,6 +228,7 @@ final class FlowSessionMirror: ObservableObject {
 
   func snooze(minutes: Int) {
     lastNudgeReply = .snooze
+    observer.userSnoozed()
     snoozeUntil = now().addingTimeInterval(TimeInterval(minutes * 60))
     observer.noteUserEvent(
       "The user snoozed your nudge for \(minutes) minutes. Do not nudge again until the snooze is over unless they switch to something new.",
