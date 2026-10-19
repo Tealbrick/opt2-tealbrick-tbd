@@ -1,34 +1,39 @@
 import { build } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import react from '@vitejs/plugin-react';
-import { join, resolve } from 'node:path';
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { buildHelper } from './tbd-helper-build.ts';
+import { licenceText, packageDirOf } from './third-party.ts';
 
-// Third-party notices: the npm packages that esbuild puts into the agent bundles (Agent SDK agent, LangChain agent,
-// relay) ship their licence texts beside the app (scripts/assemble.sh copies the file into Resources/Licenses).
+// Third-party notices: the npm packages that end up in a bundle (the helper, the renderer, the preload, the Agent SDK
+// agent, the LangChain agent, the relay) ship their licence texts beside the app (scripts/assemble.sh copies the file
+// into Resources/Licenses). Packages without a licence file get the standard text for their SPDX id.
 const bundled = new Set<string>();
-function collect(result: { metafile?: { inputs: Record<string, unknown> } }): void {
-  for (const input of Object.keys(result.metafile?.inputs ?? {})) {
-    const m = input.match(/^(?:.*\/)?node_modules\/((?:@[^/]+\/)?[^/]+)\//);
-    if (m) bundled.add(input.slice(0, input.indexOf(m[1]) + m[1].length));
+function collectIds(ids: Iterable<string>): void {
+  for (const id of ids) {
+    const dir = packageDirOf(id);
+    if (dir) bundled.add(dir);
   }
 }
+function collect(result: { metafile?: { inputs: Record<string, unknown> } }): void {
+  collectIds(Object.keys(result.metafile?.inputs ?? {}));
+}
+/** A rollup plugin for the renderer: the module ids of every chunk. */
+const collectModules = { name: 'tbd-collect-modules', generateBundle(_options: unknown, bundle: Record<string, { modules?: Record<string, unknown> }>) { for (const chunk of Object.values(bundle)) collectIds(Object.keys(chunk.modules ?? {})); } };
 function writeNotices(file: string): number {
   const parts: string[] = [];
   for (const dir of [...bundled].sort()) {
-    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name: string; version: string; license?: string };
-    const licence = readdirSync(dir).find((f) => /^(licen[cs]e|copying)/i.test(f));
-    const text = licence ? readFileSync(join(dir, licence), 'utf8').trim() : `License: ${pkg.license ?? 'see package'} (no licence file in the package)`;
+    const { pkg, text } = licenceText(dir);
     parts.push(`${pkg.name} ${pkg.version}\n${'-'.repeat(60)}\n${text}\n`);
   }
-  writeFileSync(file, `Third-party software bundled in TBD's Chat helper agents\n\n${parts.join('\n')}`);
+  writeFileSync(file, `Third-party software bundled in TBD's Chat helper, renderer and agents\n\n${parts.join('\n')}`);
   return parts.length;
 }
 mkdirSync('out/tbd', { recursive: true });
-await buildHelper();
-await viteBuild({ configFile: false, root: 'src/renderer', base: './', plugins: [react()], resolve: { alias: { '@': resolve('src/renderer/src'), '@shared': resolve('src/shared') } }, build: { outDir: resolve('out/tbd/renderer'), emptyOutDir: true, rollupOptions: { output: { format: 'iife', inlineDynamicImports: true } } } });
-await build({ entryPoints: ['src/preload/index.ts'], outfile: 'out/tbd/renderer/bridge.js', bundle: true, platform: 'browser', format: 'iife' });
+await buildHelper(undefined, collect);
+await viteBuild({ configFile: false, root: 'src/renderer', base: './', plugins: [react(), collectModules], resolve: { alias: { '@': resolve('src/renderer/src'), '@shared': resolve('src/shared') } }, build: { outDir: resolve('out/tbd/renderer'), emptyOutDir: true, rollupOptions: { output: { format: 'iife', inlineDynamicImports: true } } } });
+await build({ entryPoints: ['src/preload/index.ts'], outfile: 'out/tbd/renderer/bridge.js', bundle: true, platform: 'browser', format: 'iife', metafile: true }).then(collect);
 // Nunito comes from @opt2-tealbrick/ui (bundled by Vite from its tokens.css); its OFL licence ships beside the app.
 mkdirSync('out/tbd/renderer/brand', { recursive: true });
 copyFileSync('node_modules/@opt2-tealbrick/ui/dist/fonts/OFL.txt', 'out/tbd/renderer/brand/Nunito-OFL.txt');

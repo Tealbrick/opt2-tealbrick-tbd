@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { ANTHROPIC_KEY, assertEgressOnly, assertNoKey, fakeMcp, fakeMcpCommand, fakeServer, harness, script, skip, type Step } from "./fixtures/langchain-harness.ts";
+import { ANTHROPIC_KEY, OPENAI_KEY, assertEgressOnly, assertNoKey, fakeMcp, fakeMcpCommand, fakeServer, harness, script, skip, type Step } from "./fixtures/langchain-harness.ts";
 import type { AgentQuestion } from "../src/agent/protocol.ts";
 
 // WP-HARNESS L2, end to end: the BUILT agent-langchain.mjs with fake stdio MCP servers (Companion, Teal Brick relay),
@@ -133,6 +133,82 @@ test("e2e tools: without a relay in the config there are no Teal Brick tools", {
     await h.agent.sendTurn({ text: "go", onDelta: () => {}, onActivity: () => {} });
     const offered = fake.seen[0].body.tools.map((x: { name: string }) => x.name).sort();
     assert.deepEqual(offered, ["ask_person", "mcp__companion__timeline_search"]);
+  } finally {
+    h.agent.stop();
+    await fake.close();
+  }
+});
+
+test("e2e tools: the OpenAI route calls a tool too; its result reaches the model as a tool message", { skip, timeout: 120_000 }, async (t) => {
+  const steps: Step[] = [
+    { text: ["Looking."], tool: { id: "call_c1", name: "mcp__companion__timeline_search", input: { query: "standup" } } },
+    { text: ["You were ", "in the standup."] },
+  ];
+  const fake = await fakeServer("openai", steps);
+  const h = harness(fake.port, { harness: "langchain", provider: "openai", model: "gpt-fake", baseUrl: `http://127.0.0.1:${fake.port}`, secretEnv: { OPENAI_API_KEY: OPENAI_KEY } }, (dir) => ({
+    companionCli: fakeMcpCommand(dir, "companion", join(dir, "companion-env.json"), "timeline_search"),
+  }));
+  t.after(() => h.cleanup());
+  const deltas: string[] = [];
+  const activity: (string | null)[] = [];
+  try {
+    const result = await h.agent.sendTurn({ text: "what was I doing?", onDelta: (d) => deltas.push(d), onActivity: (a) => activity.push(a) });
+    assert.equal(result.reply, "You were in the standup.");
+    assert.deepEqual(deltas.slice(-2), ["You were ", "in the standup."]);
+    assert.ok(activity.includes("Reading your timeline"));
+    assert.equal(fake.seen.length, 2);
+    const offered = fake.seen[0].body.tools.map((x: { function: { name: string } }) => x.function.name).sort();
+    assert.deepEqual(offered, ["ask_person", "mcp__companion__timeline_search"]);
+    const messages = fake.seen[1].body.messages as { role: string; tool_call_id?: string; content?: unknown; tool_calls?: { id: string; function: { name: string; arguments: string } }[] }[];
+    const call = messages.find((m) => m.role === "assistant")?.tool_calls?.[0];
+    assert.deepEqual([call?.id, call?.function.name, JSON.parse(call?.function.arguments ?? "{}")], ["call_c1", "mcp__companion__timeline_search", { query: "standup" }]);
+    const result1 = messages.find((m) => m.role === "tool");
+    assert.equal(result1?.tool_call_id, "call_c1");
+    assert.ok(JSON.stringify(result1?.content).includes('timeline_search result for {\\"query\\":\\"standup\\"}'));
+  } finally {
+    h.agent.stop();
+    await fake.close();
+  }
+  assertEgressOnly(h.connections(), fake.port);
+  assertNoKey("openai tools", OPENAI_KEY, h.raw.stdout, h.raw.stderr);
+});
+
+test("e2e tools: a model that calls tools without end stops with a plain sentence (the step limit)", { skip, timeout: 120_000 }, async (t) => {
+  const fake = await fakeServer("anthropic", [{ tool: { id: "toolu_loop", name: "mcp__tealbrick__memory_search", input: { query: "again" } } }]); // the last step repeats
+  const h = harness(fake.port, route(fake.port), (dir) => ({
+    relay: { command: process.execPath, args: [fakeMcp, join(dir, "relay-env.json"), "memory_search"], env: relayEnv(dir) },
+  }));
+  t.after(() => h.cleanup());
+  try {
+    await assert.rejects(h.agent.sendTurn({ text: "loop", onDelta: () => {}, onActivity: () => {} }), (e: Error) => e.message === "The agent stopped after too many steps.");
+    assert.equal(h.sessionFiles().length, 0, "a failed turn saves no session");
+    assert.ok(fake.seen.length >= 10 && fake.seen.length <= 30, `bounded: ${fake.seen.length} model calls`);
+  } finally {
+    h.agent.stop();
+    await fake.close();
+  }
+});
+
+test("e2e tools: an MCP server that dies during a call is dropped; the call is an error, the next turn goes on without it (review #13)", { skip, timeout: 120_000 }, async (t) => {
+  const steps: Step[] = [
+    { tool: { id: "toolu_d1", name: "mcp__tealbrick__memory_search", input: { query: "x" } } },
+    { text: ["The app did not answer."] },
+    { text: ["Second turn without it."] },
+  ];
+  const fake = await fakeServer("anthropic", steps);
+  const h = harness(fake.port, route(fake.port), (dir) => ({
+    relay: { command: process.execPath, args: [fakeMcp, join(dir, "relay-env.json"), "memory_search", "die-on-call"], env: relayEnv(dir) },
+  }));
+  t.after(() => h.cleanup());
+  try {
+    const first = await h.agent.sendTurn({ text: "go", onDelta: () => {}, onActivity: () => {} });
+    assert.equal(first.reply, "The app did not answer.");
+    assert.match(toolResults(fake.seen[1].body).toolu_d1, /^Tool error: /, "the model got the failure as a tool error");
+    assert.match(h.raw.stderr, /tools of tealbrick dropped/, "the dead server is dropped, with a note");
+    const second = await h.agent.sendTurn({ text: "again", sessionId: first.sessionId, onDelta: () => {}, onActivity: () => {} });
+    assert.equal(second.reply, "Second turn without it.");
+    const offered = fake.seen[2].body.tools.map((x: { name: string }) => x.name);
+    assert.deepEqual(offered, ["ask_person"], "inside the 60 s back-off the family is not started again");
   } finally {
     h.agent.stop();
     await fake.close();

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { LISTENING_TOOLS, listeningFailure } from "../src/agent/listeningDefs.ts";
 import { describeToolCall, needsPermission, type AgentQuestion, type AgentToHelper } from "../src/agent/protocol.ts";
 import { runTurn, type ChatModelLike } from "../src/agent/harness/langchainGraph.ts";
-import { ASK_PERSON, askPersonTool, createInteractions, createToolSeam, listeningTools, loadMcpServer, toolLabel } from "../src/agent/harness/langchainTools.ts";
+import { ASK_PERSON, MAX_TOOL_RESULT_CHARS, askPersonTool, capContent, capText, connectionLost, createInteractions, createMcpPool, createToolSeam, listeningTools, loadMcpServer, probeFamilies, toolLabel } from "../src/agent/harness/langchainTools.ts";
 
 // WP-HARNESS L2, unit level: the tool seam, the permission and question round trips, Listening tools, MCP failures.
 
@@ -209,4 +209,113 @@ test("seam bind: a model without bindTools is a plain error; no tools leaves the
   const none = createToolSeam({ tools: [], gate: async () => ({ allow: true }) });
   assert.equal(none.bind(plain), plain);
   assert.throws(() => withTools.bind({ invoke: async () => new AIMessage("x") }), /cannot use tools/);
+});
+
+// ---------------------------------------------------------------- result cap (review #4)
+
+test("results: a tool result is cut before it enters the history, with a count of what was cut", async () => {
+  assert.equal(capText("short"), "short");
+  assert.equal(capText("x".repeat(25_000), 20_000), `${"x".repeat(20_000)}\n[cut: 5000 characters]`);
+  assert.deepEqual(capContent([{ type: "text", text: "y".repeat(30) }, { type: "image", data: "z" }], 10), [{ type: "text", text: `${"y".repeat(10)}\n[cut: 20 characters]` }, { type: "image", data: "z" }]);
+  const big = spyTool("mcp__companion__big", "b".repeat(MAX_TOOL_RESULT_CHARS + 123));
+  const seam = createToolSeam({ tools: [big.t], gate: async () => ({ allow: true }) });
+  const { messages } = await seam.run({ messages: [aiWithCall("mcp__companion__big", {})] }, { signal: signal() });
+  const text = String(messages[0].content);
+  assert.equal(text.length, MAX_TOOL_RESULT_CHARS + "\n[cut: 123 characters]".length);
+  assert.ok(text.endsWith("[cut: 123 characters]"));
+  // An error text is capped too.
+  const boom = tool(async () => { throw new Error("e".repeat(30_000)); }, { name: "mcp__companion__boom", description: "x", schema: z.object({}) });
+  const out = await createToolSeam({ tools: [boom], gate: async () => ({ allow: true }) }).run({ messages: [aiWithCall("mcp__companion__boom", {})] }, { signal: signal() });
+  assert.ok(String(out.messages[0].content).length < 20_100);
+});
+
+// ---------------------------------------------------------------- the pool (review #13)
+
+const spec = (name: string) => ({ name, command: "x", args: [], env: {} });
+const loadedTools = (names: string[]) => ({ tools: names.map((n) => spyTool(n).t), close: async () => {} });
+
+test("pool: a family that failed is not tried again for 60 s; a family that came up is kept", async () => {
+  let clock = 1_000;
+  const calls: string[] = [];
+  const closed: string[] = [];
+  const pool = createMcpPool({
+    log: () => {}, now: () => clock,
+    load: async (s, log) => {
+      calls.push(s.name);
+      if (s.name === "tealbrick") { log("tools of tealbrick are not available (no answer in time)"); return null; }
+      return { ...loadedTools([`mcp__${s.name}__t`]), close: async () => { closed.push(s.name); } };
+    },
+  });
+  const specs = [spec("companion"), spec("tealbrick")];
+  await pool.ensure(specs);
+  assert.deepEqual(pool.names(), ["companion"]);
+  assert.equal(pool.reason("tealbrick"), "tools of tealbrick are not available (no answer in time)");
+  clock += 59_000;
+  await pool.ensure(specs);
+  assert.deepEqual(calls, ["companion", "tealbrick"], "no retry inside the back-off, and no second start of the family that is up");
+  clock += 2_000;
+  await pool.ensure(specs);
+  assert.deepEqual(calls, ["companion", "tealbrick", "tealbrick"], "retried after 60 s");
+  await pool.ensure(specs, true);
+  assert.equal(calls.length, 4, "force (the self-test) ignores the back-off");
+  await pool.closeAll();
+  assert.deepEqual(closed, ["companion"]);
+});
+
+test("pool: a lost connection drops the family; it comes back after the back-off; a wrong call does not drop it", async () => {
+  let clock = 0;
+  let starts = 0;
+  const closed: string[] = [];
+  const pool = createMcpPool({ log: () => {}, now: () => clock, load: async (s) => { starts += 1; return { ...loadedTools([`mcp__${s.name}__t`]), close: async () => { closed.push(s.name); } }; } });
+  const specs = [spec("companion")];
+  await pool.ensure(specs);
+  pool.toolFailed("mcp__companion__t", new Error("Invalid arguments"));
+  assert.deepEqual(pool.names(), ["companion"], "a bad call is not a dead server");
+  pool.toolFailed("mcp__companion__t", new Error("MCP error -32000: Connection closed"));
+  assert.deepEqual(pool.names(), []);
+  assert.deepEqual(pool.tools(), [], "its tools are no longer offered");
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(closed, ["companion"]);
+  await pool.ensure(specs);
+  assert.equal(starts, 1, "not before the back-off");
+  clock += 61_000;
+  await pool.ensure(specs);
+  assert.equal(starts, 2);
+  assert.deepEqual(pool.names(), ["companion"]);
+});
+
+test("connection errors are told from call errors", () => {
+  for (const m of ["Connection closed", "MCP error -32000: Connection closed", "write EPIPE", "read ECONNRESET", "Client is not connected", "socket hang up"]) assert.equal(connectionLost(new Error(m)), true, m);
+  for (const m of ["Invalid arguments", "Tool error: no such recording", "timeout"]) assert.equal(connectionLost(new Error(m)), false, m);
+});
+
+test("seam: a failing MCP call reaches onToolError with the tool's name", async () => {
+  const seen: string[] = [];
+  const boom = tool(async () => { throw new Error("Connection closed"); }, { name: "mcp__tealbrick__x", description: "x", schema: z.object({}) });
+  const seam = createToolSeam({ tools: [boom], gate: async () => ({ allow: true }), onToolError: (name, e) => seen.push(`${name}:${(e as Error).message}`) });
+  const { messages } = await seam.run({ messages: [aiWithCall("mcp__tealbrick__x", {})] }, { signal: signal() });
+  assert.deepEqual(seen, ["mcp__tealbrick__x:Connection closed"]);
+  assert.equal((messages[0] as ToolMessage).status, "error");
+});
+
+// ---------------------------------------------------------------- the self-test's probes (review #3)
+
+test("probes: configured, loaded and one probe per family; a family that did not come up carries its reason", async () => {
+  const pool = createMcpPool({
+    log: () => {},
+    load: async (s, log) => { if (s.name === "tealbrick") { log("tools of tealbrick are not available (spawn x ENOENT)"); return null; } return loadedTools(["mcp__companion__t"]); },
+  });
+  const listMeetings = LISTENING_TOOLS.find((d) => d.name === "list_meetings");
+  assert.ok(listMeetings);
+  const calls: string[][] = [];
+  const ok = await probeFamilies({ specs: [spec("companion"), spec("tealbrick")], pool, listening: { cli: "/bin/tbd-listen", def: listMeetings, exec: async (cli, args) => { calls.push([cli, ...args]); return "[]"; } } });
+  assert.deepEqual(ok, {
+    configured: ["companion", "tealbrick", "listening"],
+    loaded: ["companion", "listening"],
+    probes: { companion: null, tealbrick: "tools of tealbrick are not available (spawn x ENOENT)", listening: null },
+  });
+  assert.deepEqual(calls, [["/bin/tbd-listen", "meetings", "--json"]], "Listening is probed with list_meetings");
+  const failing = await probeFamilies({ specs: [], pool: createMcpPool({ log: () => {} }), listening: { cli: "/bin/x", def: listMeetings, exec: async () => { throw new Error("no such file"); } } });
+  assert.deepEqual(failing, { configured: ["listening"], loaded: [], probes: { listening: "no such file" } });
+  assert.deepEqual(await probeFamilies({ specs: [], pool: createMcpPool({ log: () => {} }) }), { configured: [], loaded: [], probes: {} });
 });

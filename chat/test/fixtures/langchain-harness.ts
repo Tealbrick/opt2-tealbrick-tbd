@@ -55,7 +55,7 @@ export async function fakeServer(kind: "anthropic" | "openai", mode: Mode): Prom
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       const step = Array.isArray(mode) ? mode[Math.min(served, mode.length - 1)] : { text: pieces };
       served += 1;
-      const events: string[] = kind === "anthropic" ? anthropicEvents(step) : openaiEvents(step.text ?? pieces);
+      const events: string[] = kind === "anthropic" ? anthropicEvents(step) : openaiEvents(step);
       let i = 0;
       const send = () => {
         if (i >= events.length) { res.end(); return; }
@@ -93,12 +93,19 @@ function anthropicEvents(step: Step): string[] {
   return events;
 }
 
-function openaiEvents(pieces: string[]): string[] {
+function openaiEvents(step: Step): string[] {
   const chunk = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({ id: "chatcmpl-1", object: "chat.completion.chunk", created: 1, model: "gpt-fake", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+  const args = step.tool ? JSON.stringify(step.tool.input) : "";
   return [
     chunk({ role: "assistant", content: "" }, null),
-    ...pieces.map((content) => chunk({ content }, null)),
-    chunk({}, "stop"),
+    ...(step.text ?? []).map((content) => chunk({ content }, null)),
+    ...(step.tool ? [
+      chunk({ tool_calls: [{ index: 0, id: step.tool.id, type: "function", function: { name: step.tool.name, arguments: "" } }] }, null),
+      // The arguments arrive in two pieces, as a real server streams them.
+      chunk({ tool_calls: [{ index: 0, function: { arguments: args.slice(0, 5) } }] }, null),
+      chunk({ tool_calls: [{ index: 0, function: { arguments: args.slice(5) } }] }, null),
+    ] : []),
+    chunk({}, step.tool ? "tool_calls" : "stop"),
     "data: [DONE]\n\n",
   ];
 }

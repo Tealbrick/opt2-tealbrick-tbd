@@ -4,7 +4,7 @@
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-const [envFile, toolName] = process.argv.slice(2);
+const [envFile, toolName, mode] = process.argv.slice(2);
 writeFileSync(envFile, JSON.stringify(process.env));
 const reply = (id: unknown, result: unknown) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 createInterface({ input: process.stdin }).on("line", (line) => {
@@ -19,6 +19,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       annotations: { readOnlyHint: true },
     }] });
   } else if (m.method === "tools/call") {
+    if (mode === "die-on-call") process.exit(1); // the server dies in the middle of a call
     reply(m.id, { content: [{ type: "text", text: `${m.params?.name} result for ${JSON.stringify(m.params?.arguments ?? {})}` }] });
   } else if (m.id !== undefined && m.method) {
     reply(m.id, {});

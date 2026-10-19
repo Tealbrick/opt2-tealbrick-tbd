@@ -5,7 +5,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import { z } from "zod";
 import type { ListeningToolDef } from "../listeningDefs";
-import type { AgentQuestion, AgentToHelper } from "../protocol";
+import type { AgentQuestion, AgentToHelper, SelfTestTools } from "../protocol";
 import type { ChatModelLike, GraphState, ToolSeam } from "./langchainGraph";
 
 /**
@@ -84,15 +84,46 @@ export function createInteractions(send: (m: AgentToHelper) => void, policy: Per
 
 // ---------------------------------------------------------------- the tool seam
 
+/** A tool result enters the history whole, every turn after it: it is cut here (review #4). */
+export const MAX_TOOL_RESULT_CHARS = 20_000;
+
+/** Cut text longer than `max` and say how much was cut. */
+export function capText(text: string, max = MAX_TOOL_RESULT_CHARS): string {
+  return text.length > max ? `${text.slice(0, max)}\n[cut: ${text.length - max} characters]` : text;
+}
+
+/** Cap the text of a tool result (a string, or the text blocks of a content array). */
+export function capContent(content: unknown, max = MAX_TOOL_RESULT_CHARS): ToolMessage["content"] {
+  if (typeof content === "string") return capText(content, max);
+  if (Array.isArray(content)) {
+    return content.map((block) => (block && typeof block === "object" && (block as { type?: string }).type === "text" && typeof (block as { text?: unknown }).text === "string"
+      ? { ...block, text: capText((block as { text: string }).text, max) } : block)) as ToolMessage["content"];
+  }
+  return capText(JSON.stringify(content ?? ""), max);
+}
+
+/** Whether a tool error means the MCP server's connection is gone (the process died or closed), not that the call was wrong. */
+export function connectionLost(error: unknown): boolean {
+  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return /connection closed|not connected|disconnect|EPIPE|ECONNRESET|socket hang up|transport (is )?closed|MCP error -32000|client is closed/i.test(text);
+}
+
 export interface SeamOptions {
   tools: StructuredToolInterface[];
   /** Decides each call before it runs (see createInteractions.gate). */
   gate(name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<Decision>;
   /** Tools that ask the person themselves and so skip the gate (ask_person). */
   ungated?: ReadonlySet<string>;
+  /** Called when a tool call throws; lets the owner drop an MCP server whose connection is gone. */
+  onToolError?(name: string, error: unknown): void;
 }
 
-const failed = (id: string, name: string, text: string) => new ToolMessage({ tool_call_id: id, name, content: text, status: "error" });
+const failed = (id: string, name: string, text: string) => new ToolMessage({ tool_call_id: id, name, content: capText(text), status: "error" });
+
+function capped(message: ToolMessage): ToolMessage {
+  message.content = capContent(message.content);
+  return message;
+}
 
 /** The L1 `ToolSeam` filled in: bind the tools to the model, run the calls of the last AI message one by one. */
 export function createToolSeam(options: SeamOptions): ToolSeam {
@@ -119,9 +150,10 @@ export function createToolSeam(options: SeamOptions): ToolSeam {
         }
         try {
           const result = await found.invoke({ id, name: call.name, args, type: "tool_call" }, config);
-          messages.push(ToolMessage.isInstance(result) ? result : new ToolMessage({ tool_call_id: id, name: call.name, content: typeof result === "string" ? result : JSON.stringify(result) }));
+          messages.push(capped(ToolMessage.isInstance(result) ? result : new ToolMessage({ tool_call_id: id, name: call.name, content: typeof result === "string" ? result : JSON.stringify(result) })));
         } catch (error) {
           if (config.signal?.aborted) break; // the turn was stopped; the graph ends it
+          options.onToolError?.(call.name, error);
           messages.push(failed(id, call.name, `Tool error: ${error instanceof Error ? error.message : String(error)}`));
         }
       }
@@ -210,4 +242,92 @@ export async function loadMcpServer(spec: McpServerSpec, log: (note: string) => 
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+// ---------------------------------------------------------------- the pool of MCP servers
+
+/** A family that failed is not tried again for this long (the failed start costs up to 20 s of a turn). */
+export const MCP_BACKOFF_MS = 60_000;
+
+/**
+ * The MCP servers of the agent, by family. A server is started when a turn needs it, kept for later turns, and dropped
+ * when its connection is gone (the next try comes after the back-off). A family that failed to start is not tried again
+ * before the back-off has passed. `force` (the self-test, on a fresh process) ignores the back-off.
+ */
+export function createMcpPool(options: { log: (note: string) => void; load?: typeof loadMcpServer; now?: () => number; backoffMs?: number }) {
+  const load = options.load ?? loadMcpServer;
+  const now = options.now ?? Date.now;
+  const backoff = options.backoffMs ?? MCP_BACKOFF_MS;
+  const loaded = new Map<string, LoadedTools>();
+  const failedAt = new Map<string, number>();
+  const reasons = new Map<string, string>();
+  let loading: Promise<void> | null = null;
+
+  const pool = {
+    async ensure(specs: McpServerSpec[], force = false): Promise<void> {
+      loading ??= Promise.all(specs
+        .filter((s) => !loaded.has(s.name) && (force || now() - (failedAt.get(s.name) ?? -Infinity) >= backoff))
+        .map(async (spec) => {
+          const result = await load(spec, (note) => { reasons.set(spec.name, note); options.log(note); });
+          if (result) { loaded.set(spec.name, result); failedAt.delete(spec.name); reasons.delete(spec.name); }
+          else failedAt.set(spec.name, now());
+        })).then(() => {}).finally(() => { loading = null; });
+      await loading;
+    },
+    tools: (): StructuredToolInterface[] => [...loaded.values()].flatMap((m) => m.tools),
+    names: (): string[] => [...loaded.keys()],
+    /** Why the family is not loaded (the last note), if it is not. */
+    reason: (name: string): string | undefined => reasons.get(name),
+    /** Drop a family (its connection is gone); it comes back after the back-off. */
+    drop(name: string, why: string): void {
+      const entry = loaded.get(name);
+      if (!entry) return;
+      loaded.delete(name);
+      failedAt.set(name, now());
+      reasons.set(name, why);
+      options.log(`tools of ${name} dropped (${why})`);
+      void entry.close();
+    },
+    /** For `SeamOptions.onToolError`: a lost connection drops the family the tool belongs to. */
+    toolFailed(toolName: string, error: unknown): void {
+      const family = /^mcp__([a-z0-9]+)__/.exec(toolName)?.[1];
+      if (family && connectionLost(error)) pool.drop(family, error instanceof Error ? error.message : String(error));
+    },
+    async closeAll(timeoutMs = 800): Promise<void> {
+      await Promise.race([Promise.all([...loaded.values()].map((m) => m.close())), new Promise((r) => setTimeout(r, timeoutMs))]);
+    },
+  };
+  return pool;
+}
+
+export type McpPool = ReturnType<typeof createMcpPool>;
+
+/**
+ * The self-test's check of the tool families (WP-HARNESS L3, check 4): load each configured family and probe it with
+ * one cheap read-only call. An MCP family counts when its tools/list answered; Listening runs its list_meetings
+ * definition. `probes[family]` is null when it answered, else the error text.
+ */
+export async function probeFamilies(options: {
+  specs: McpServerSpec[];
+  pool: McpPool;
+  listening?: { cli: string; def: ListeningToolDef; exec?: (cli: string, args: string[]) => Promise<string> };
+}): Promise<SelfTestTools> {
+  const configured = [...options.specs.map((s) => s.name), ...(options.listening ? ["listening"] : [])];
+  const loaded: string[] = [];
+  const probes: Record<string, string | null> = {};
+  await options.pool.ensure(options.specs, true);
+  for (const spec of options.specs) {
+    if (options.pool.names().includes(spec.name)) { loaded.push(spec.name); probes[spec.name] = null; }
+    else probes[spec.name] = options.pool.reason(spec.name) ?? "the server did not start";
+  }
+  if (options.listening) {
+    try {
+      await options.listening.def.run({}, options.listening.cli, options.listening.exec);
+      loaded.push("listening");
+      probes.listening = null;
+    } catch (error) {
+      probes.listening = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return { configured, loaded, probes };
 }

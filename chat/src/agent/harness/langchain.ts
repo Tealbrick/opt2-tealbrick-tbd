@@ -6,10 +6,10 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { describeToolCall, needsPermission, type AgentConfig, type AgentToHelper, type HelperToAgent } from "../protocol";
 import type { ContentBlock } from "../../shared/message";
 import { LISTENING_TOOLS, listeningFailure } from "../listeningDefs";
-import { runTurn } from "./langchainGraph";
+import { describeError, runTurn } from "./langchainGraph";
 import { createChatModel } from "./langchainModels";
 import { fileSessionStore, type SessionStore } from "./langchainSessions";
-import { ASK_PERSON, askPersonTool, createInteractions, createToolSeam, listeningTools, loadMcpServer, type LoadedTools, type McpServerSpec } from "./langchainTools";
+import { ASK_PERSON, askPersonTool, createInteractions, createMcpPool, createToolSeam, listeningTools, probeFamilies, type McpServerSpec } from "./langchainTools";
 
 /**
  * TBD's LangChain agent process (WP-HARNESS L1): the same stdio protocol as the Agent SDK agent (agent/main.ts),
@@ -27,9 +27,8 @@ const turns = new Map<string, AbortController>();
 const interactions = createInteractions(out, { needsPermission, describe: describeToolCall });
 const note = (text: string) => console.error(`[agent-langchain] ${text}`);
 
-/** MCP servers that started, by family. A family that failed is tried again on the next turn. */
-const mcp = new Map<string, LoadedTools>();
-let loading: Promise<void> | null = null;
+/** MCP servers by family: started when a turn needs them, dropped when their connection is gone, backed off after a failure. */
+const mcp = createMcpPool({ log: note });
 
 /** Harness-local servers (C5): Companion timeline and, once connected, the Teal Brick relay. Explicit environments only. */
 function mcpSpecs(c: AgentConfig): McpServerSpec[] {
@@ -40,17 +39,8 @@ function mcpSpecs(c: AgentConfig): McpServerSpec[] {
   return specs;
 }
 
-async function ensureMcp(c: AgentConfig): Promise<void> {
-  loading ??= Promise.all(mcpSpecs(c).filter((s) => !mcp.has(s.name)).map(async (spec) => {
-    const loaded = await loadMcpServer(spec, note);
-    if (loaded) mcp.set(spec.name, loaded);
-  })).then(() => {}).finally(() => { loading = null; });
-  await loading;
-}
-
-async function closeMcp(): Promise<void> {
-  await Promise.race([Promise.all([...mcp.values()].map((m) => m.close())), new Promise((r) => setTimeout(r, 800))]);
-}
+// A promise nobody awaited must not take the agent down (stderr only).
+process.on("unhandledRejection", (reason) => note(`unhandled rejection: ${scrub(reason instanceof Error ? reason.message : String(reason))}`));
 
 /** A provider error can quote the key; the supervisor scrubs too, this is the first line of defence. */
 function scrub(text: string): string {
@@ -72,35 +62,50 @@ const scratch = (): SessionStore => { const m = new Map<string, BaseMessage[]>()
 
 async function turn(id: string, text: string, sessionId?: string, content?: ContentBlock[], selfTest = false): Promise<void> {
   if (!config) { out({ type: "error", id, message: "Agent is not initialised." }); return; }
+  const c = config;
   const abort = new AbortController();
   turns.set(id, abort);
   try {
-    const { model, provider } = createChatModel(config.model, process.env);
-    await ensureMcp(config);
+    const { model, provider } = createChatModel(c.model, process.env);
+    const hooks = {
+      onSession: (s: string) => out({ type: "event", id, event: { kind: "session", sessionId: s } }),
+      onDelta: (t: string) => out({ type: "event", id, event: { kind: "delta", text: t } }),
+      onReset: () => out({ type: "event", id, event: { kind: "reset" } }),
+      onActivity: (label: string | null) => out({ type: "event", id, event: { kind: "activity", label } }),
+    };
+    const system = [SYSTEM, c.systemAppend ?? ""].filter(Boolean).join("\n");
+    if (selfTest) {
+      // The setup's check: one throwaway exchange with NO tools bound to the model, and each configured family loaded and
+      // probed with one cheap read-only call. Nothing is written to the person's sessions.
+      const listening = LISTENING_TOOLS.find((d) => d.name === "list_meetings");
+      const [result, report] = await Promise.all([
+        runTurn({ model, provider, text, system, store: scratch(), signal: abort.signal, hooks, log: note }),
+        probeFamilies({ specs: mcpSpecs(c), pool: mcp, ...(c.listeningCli && listening ? { listening: { cli: c.listeningCli, def: listening } } : {}) }),
+      ]);
+      out({ type: "event", id, event: { kind: "activity", label: null } });
+      out({ type: "done", id, sessionId: result.sessionId, reply: result.reply, selfTest: JSON.parse(scrub(JSON.stringify(report))) });
+      return;
+    }
+    await mcp.ensure(mcpSpecs(c));
     const tools: StructuredToolInterface[] = [
-      ...[...mcp.values()].flatMap((m) => m.tools),
-      ...(config.listeningCli ? listeningTools(LISTENING_TOOLS, config.listeningCli, listeningFailure) : []),
+      ...mcp.tools(),
+      ...(c.listeningCli ? listeningTools(LISTENING_TOOLS, c.listeningCli, listeningFailure) : []),
       askPersonTool((questions, signal) => interactions.ask(id, questions, signal)),
     ];
     const result = await runTurn({
-      model, provider, sessionId, text, content,
-      tools: createToolSeam({ tools, gate: (name, input, signal) => interactions.gate(id, name, input, signal), ungated: new Set([ASK_PERSON]) }),
-      system: [SYSTEM, config.systemAppend ?? ""].filter(Boolean).join("\n"),
-      store: selfTest ? scratch() : fileSessionStore(config.stateDir),
+      model, provider, sessionId, text, content, system, hooks, log: note,
+      tools: createToolSeam({
+        tools, gate: (name, input, signal) => interactions.gate(id, name, input, signal), ungated: new Set([ASK_PERSON]),
+        onToolError: (name, error) => mcp.toolFailed(name, error),
+      }),
+      store: fileSessionStore(c.stateDir, note),
       signal: abort.signal,
-      hooks: {
-        onSession: (s) => out({ type: "event", id, event: { kind: "session", sessionId: s } }),
-        onDelta: (t) => out({ type: "event", id, event: { kind: "delta", text: t } }),
-        onReset: () => out({ type: "event", id, event: { kind: "reset" } }),
-        onActivity: (label) => out({ type: "event", id, event: { kind: "activity", label } }),
-      },
     });
     out({ type: "event", id, event: { kind: "activity", label: null } });
-    const families = [...mcp.keys(), ...(config.listeningCli ? ["listening"] : []), "ask_person"];
-    out({ type: "done", id, sessionId: result.sessionId, reply: selfTest ? JSON.stringify({ reply: result.reply, tools: families }) : result.reply });
+    out({ type: "done", id, sessionId: result.sessionId, reply: result.reply });
   } catch (error) {
     out({ type: "event", id, event: { kind: "activity", label: null } });
-    out({ type: "error", id, message: abort.signal.aborted ? "Stopped." : scrub(error instanceof Error ? error.message : String(error)) });
+    out({ type: "error", id, message: abort.signal.aborted ? "Stopped." : scrub(describeError(error)) });
   } finally {
     turns.delete(id);
   }
@@ -116,7 +121,7 @@ lines.on("line", (line) => {
     case "cancel": turns.get(m.id)?.abort(); break;
     case "permission": interactions.onPermission(m); break;
     case "answer": interactions.onAnswer(m); break;
-    case "shutdown": for (const t of turns.values()) t.abort(); void closeMcp().finally(() => setTimeout(() => process.exit(0), 300)); break;
+    case "shutdown": for (const t of turns.values()) t.abort(); void mcp.closeAll().finally(() => setTimeout(() => process.exit(0), 300)); break;
   }
 });
-lines.on("close", () => { void closeMcp().finally(() => process.exit(0)); });
+lines.on("close", () => { void mcp.closeAll().finally(() => process.exit(0)); });

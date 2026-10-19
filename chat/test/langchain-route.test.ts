@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
-import { createDefaultAgent, harnessFor, HARNESSES, langchain, claudeAgentSdk, MODEL_SECRET_NAMES, type AgentRoute } from "../src/main/defaultAgent.ts";
+import { createDefaultAgent, harnessFor, HARNESSES, LANGCHAIN_SECRET_NAMES, langchain, claudeAgentSdk, MODEL_SECRET_NAMES, type AgentRoute } from "../src/main/defaultAgent.ts";
 import { MODEL_SECRET_NAMES as AGENT_SECRET } from "../src/agent/modelEnv.ts";
 import { disableTracing, TRACING_OFF } from "../src/agent/harness/tracingOff.ts";
 import { PROVIDER_KEY_NAME, createChatModel, providerOf } from "../src/agent/harness/langchainModels.ts";
@@ -114,4 +114,32 @@ test("models: provider choice and the key name; no key = a plain sentence", () =
   assert.throws(() => createChatModel({ model: "m", provider: "openai" }, { ANTHROPIC_API_KEY: ANTHROPIC_KEY }), /\(OPENAI_API_KEY\)/);
   assert.equal(createChatModel({ model: "m" }, { ANTHROPIC_API_KEY: ANTHROPIC_KEY }).provider, "anthropic");
   assert.equal(createChatModel({ model: "m", provider: "openai", baseUrl: "http://127.0.0.1:9" }, { OPENAI_API_KEY: OPENAI_KEY }).provider, "openai");
+});
+
+test("langchain route: only the two keys it uses are accepted; cloud-provider secrets are refused (review #16)", () => {
+  for (const name of ["AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY"]) {
+    const route: AgentRoute = { harness: "langchain", model: "m", secretEnv: { [name]: "x" } };
+    assert.throws(() => langchain.processEnv(route, host), new RegExp(`unsupported secret setting \\(${name}\\)`));
+    assert.throws(() => langchain.initModel(route), new RegExp(`unsupported secret setting \\(${name}\\)`));
+    // The Agent SDK adapter still takes them.
+    assert.doesNotThrow(() => claudeAgentSdk.processEnv(route, host));
+  }
+  assert.deepEqual([...LANGCHAIN_SECRET_NAMES].sort(), ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]);
+});
+
+test("models: counting tokens never fetches anything (no tiktoken download), for both providers (review #12)", async () => {
+  const realFetch = globalThis.fetch;
+  const fetched: string[] = [];
+  globalThis.fetch = (async (input: unknown) => { fetched.push(String(input)); throw new Error("no network in this test"); }) as typeof fetch;
+  try {
+    for (const model of [{ model: "claude-x" }, { model: "gpt-x", provider: "openai" as const }]) {
+      const { model: chat } = createChatModel(model, { ANTHROPIC_API_KEY: ANTHROPIC_KEY, OPENAI_API_KEY: OPENAI_KEY });
+      const counting = chat as unknown as { getNumTokens(c: unknown): Promise<number>; getNumTokensFromMessages(m: { content: unknown }[]): Promise<{ totalCount: number }> };
+      assert.equal(await counting.getNumTokens("hello world, this is text"), 7);
+      assert.ok((await counting.getNumTokensFromMessages([{ content: "hi there" }, { content: [{ type: "text", text: "more" }] }])).totalCount > 0);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(fetched, [], "no request, so none to tiktoken.pages.dev");
 });

@@ -122,6 +122,15 @@ export interface TurnInput {
   signal: AbortSignal;
   hooks: TurnHooks;
   newSessionId?: () => string;
+  /** Notes for the agent's own log (stderr); default console.error. */
+  log?: (note: string) => void;
+}
+
+/** What the person reads when a turn fails. */
+export function describeError(error: unknown): string {
+  const e = error instanceof Error ? error : new Error(String(error));
+  if (e.name === "GraphRecursionError" || /recursion limit/i.test(e.message)) return "The agent stopped after too many steps.";
+  return e.message;
 }
 
 function stopped(): Error {
@@ -199,6 +208,11 @@ export async function runTurn(input: TurnInput): Promise<{ sessionId: string; re
   // A provider that did not stream still shows its answer.
   if (!emitted && reply) hooks.onDelta(reply);
   hooks.onActivity(null);
-  input.store.save(sessionId, finalMessages);
+  try {
+    input.store.save(sessionId, finalMessages);
+  } catch (error) {
+    // The answer exists: a history that could not be saved is a note in the log, not the turn's error.
+    (input.log ?? ((note) => console.error(`[agent-langchain] ${note}`)))(`session ${sessionId} could not be saved (${error instanceof Error ? error.message : String(error)})`);
+  }
   return { sessionId, reply };
 }

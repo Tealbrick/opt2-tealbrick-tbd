@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIMessage, AIMessageChunk, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { FakeStreamingChatModel } from "@langchain/core/utils/testing";
-import { contentText, humanContent, runTurn, type ChatModelLike, type ToolSeam, type TurnHooks } from "../src/agent/harness/langchainGraph.ts";
-import { fileSessionStore, isSessionId, sessionsDir, type SessionStore } from "../src/agent/harness/langchainSessions.ts";
+import { contentText, describeError, humanContent, runTurn, type ChatModelLike, type ToolSeam, type TurnHooks } from "../src/agent/harness/langchainGraph.ts";
+import { compactHistory, fileSessionStore, isSessionId, sessionsDir, type SessionStore } from "../src/agent/harness/langchainSessions.ts";
 
 // WP-HARNESS L1: the graph with a fake chat model (no network), sessions on disk, cancel.
 
@@ -186,16 +186,114 @@ test("sessions: a turn with a session id resumes the saved history, and the next
   assert.deepEqual((fileSessionStore(dir).load(first.sessionId) ?? []).map((m) => contentText(m.content)), ["one", "answer 1", "two", "answer 2"]);
 });
 
-test("sessions: a session id with a path part is refused; a damaged file is an error, not a crash", (t) => {
-  const dir = privateTemp(t);
-  const store = fileSessionStore(dir);
+test("sessions: a session id with a path part is refused", (t) => {
+  const store = fileSessionStore(privateTemp(t));
   for (const id of ["../x", "a/b", "", ".hidden", "a b", "x".repeat(200)]) {
     assert.equal(isSessionId(id), false, id);
     assert.throws(() => store.load(id), /not valid/);
     assert.throws(() => store.save(id, []), /not valid/);
   }
   assert.equal(isSessionId("0f8fad5b-d9cb-469f-a165-70867728950e"), true);
-  store.save("good", []);
-  writeFileSync(join(sessionsDir(dir), "good.json"), "{\"version\":2}");
-  assert.throws(() => store.load("good"), /not readable/);
+});
+
+test("sessions: a damaged file starts a new history with a note; the damaged file is kept beside it (review #14)", async (t) => {
+  const dir = privateTemp(t);
+  const notes: string[] = [];
+  const store = fileSessionStore(dir, (n) => notes.push(n));
+  store.save("good", [new HumanMessage("old")]);
+  const file = join(sessionsDir(dir), "good.json");
+  for (const damage of ["{\"version\":2}", "not json at all"]) {
+    writeFileSync(file, damage);
+    assert.equal(store.load("good"), null, "no history: a new one starts under the same id");
+  }
+  assert.equal(notes.length, 2);
+  assert.match(notes[0], /session good could not be read/);
+  assert.ok(readdirSync(sessionsDir(dir)).some((f) => f.startsWith("good.json.damaged-")), "the damaged file is moved aside, not deleted");
+  // And a turn on it just works.
+  writeFileSync(file, "{broken");
+  const model: ChatModelLike = { invoke: async () => new AIMessage("fresh") };
+  const result = await runTurn({ model, provider: "anthropic", store, sessionId: "good", text: "hi", signal: new AbortController().signal, hooks: recorder().hooks });
+  assert.equal(result.reply, "fresh");
+  assert.deepEqual((store.load("good") ?? []).map((m) => contentText(m.content)), ["hi", "fresh"]);
+});
+
+test("graph: a history that cannot be saved is a note in the log, not the turn's error (review #14)", async () => {
+  const notes: string[] = [];
+  const store: SessionStore = { load: () => null, save: () => { throw new Error("disk full"); } };
+  const result = await runTurn({ model: { invoke: async () => new AIMessage("answer") }, provider: "anthropic", store, text: "hi", signal: new AbortController().signal, hooks: recorder().hooks, log: (n) => notes.push(n), newSessionId: fixedId });
+  assert.equal(result.reply, "answer");
+  assert.deepEqual(notes, ["session sess-1 could not be saved (disk full)"]);
+});
+
+test("graph: the recursion limit is a plain sentence", () => {
+  const error = new Error("Recursion limit of 25 reached without hitting a stop condition.");
+  error.name = "GraphRecursionError";
+  assert.equal(describeError(error), "The agent stopped after too many steps.");
+  assert.equal(describeError(new Error("Recursion limit of 25 reached")), "The agent stopped after too many steps.");
+  assert.equal(describeError(new Error("provider said no")), "provider said no");
+  assert.equal(describeError("text"), "text");
+});
+
+// ---------------------------------------------------------------- history size (review #4)
+
+const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+const pdfBlock = (data: string) => ({ type: "document", title: "a.pdf", source: { type: "base64", media_type: "application/pdf", data } });
+
+test("history: attachments of earlier turns become a text placeholder; the last turn keeps its own", () => {
+  const messages = [
+    new HumanMessage({ content: [{ type: "text", text: "look" }, imageBlock("A".repeat(1000)), pdfBlock("B".repeat(1000)), { type: "image_url", image_url: { url: `data:image/jpeg;base64,${"C".repeat(500)}` } }] }),
+    new AIMessage("seen"),
+    new HumanMessage({ content: [{ type: "text", text: "again" }, imageBlock("D".repeat(1000))] }),
+    new AIMessage("seen again"),
+  ];
+  const out = compactHistory(messages);
+  assert.deepEqual(out[0].content, [
+    { type: "text", text: "look" },
+    { type: "text", text: "[attachment omitted: image/png]" },
+    { type: "text", text: "[attachment omitted: a.pdf, application/pdf]" },
+    { type: "text", text: "[attachment omitted: image/jpeg]" },
+  ]);
+  assert.equal(JSON.stringify(out[0]).includes("AAAA"), false);
+  assert.deepEqual(out[2].content, messages[2].content, "the last turn is kept as it was");
+  assert.equal(out.length, 4);
+});
+
+test("history: over the budget, the oldest exchanges go first and the last turn stays whole", () => {
+  const exchange = (n: number) => [new HumanMessage(`q${n} ${"x".repeat(1000)}`), new AIMessage(`a${n} ${"y".repeat(1000)}`)];
+  const messages = [1, 2, 3, 4, 5].flatMap(exchange);
+  const out = compactHistory(messages, 5000);
+  const heads = out.filter((m) => m.getType() === "human").map((m) => String(m.content).slice(0, 2));
+  assert.deepEqual(heads, ["q3", "q4", "q5"].slice(-heads.length), "the newest exchanges stay");
+  assert.ok(heads.length < 5 && heads.at(-1) === "q5");
+  assert.equal(out[0].getType(), "human", "never starts in the middle of an exchange");
+  // A last turn bigger than the budget is still kept whole.
+  const huge = compactHistory([...exchange(1), new HumanMessage("z".repeat(10_000)), new AIMessage("ok")], 2000);
+  assert.deepEqual(huge.map((m) => m.getType()), ["human", "ai"]);
+  assert.equal(String(huge[0].content).length, 10_000);
+  // Within the budget nothing changes.
+  assert.equal(compactHistory(messages, 10_000_000).length, 10);
+});
+
+test("history: tool calls and their results leave together with their exchange", () => {
+  const withTool = (n: number) => [
+    new HumanMessage(`q${n} ${"x".repeat(2000)}`),
+    new AIMessage({ content: "", tool_calls: [{ id: `t${n}`, name: "mcp__companion__timeline_search", args: {}, type: "tool_call" }] }),
+    new ToolMessage({ tool_call_id: `t${n}`, content: "r".repeat(2000) }),
+    new AIMessage(`a${n}`),
+  ];
+  const out = compactHistory([...withTool(1), ...withTool(2), ...withTool(3)], 7000);
+  const types = out.map((m) => m.getType());
+  assert.equal(types[0], "human");
+  assert.ok(types.length % 4 === 0 && types.length < 12);
+  const callIds = new Set(out.flatMap((m) => (AIMessage.isInstance(m) ? (m.tool_calls ?? []).map((c) => c.id) : [])));
+  for (const m of out) if (ToolMessage.isInstance(m)) assert.ok(callIds.has(m.tool_call_id), "no tool result without its call");
+});
+
+test("history: a saved session is compacted on disk", (t) => {
+  const dir = privateTemp(t);
+  const store = fileSessionStore(dir);
+  store.save("s", [new HumanMessage({ content: [{ type: "text", text: "a" }, imageBlock("Q".repeat(5000))] }), new AIMessage("x"), new HumanMessage("b"), new AIMessage("y")]);
+  const raw = readFileSync(join(sessionsDir(dir), "s.json"), "utf8");
+  assert.equal(raw.includes("QQQQ"), false);
+  assert.ok(raw.includes("attachment omitted"));
 });
