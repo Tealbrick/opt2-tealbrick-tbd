@@ -45,6 +45,11 @@ final class TBDOnboardingController: ObservableObject {
   @Published private(set) var companionMessage: String?
   /// The shown cloud fields are the active, saved setting (the "Saved" tag shows only then; review dev.10 #6).
   var cloudSaved: Bool { cloudStore.isActive && cloudStore.load() == cloud }
+  /// Typed, complete cloud fields that are not saved yet: Next saves them (review dev.10 #6b).
+  var cloudReadyToSave: Bool {
+    agentRuntime == .cloud && agentAnswer == .yes && !cloudSaved
+      && cloud.missing(hasKey: !cloudKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || cloudKeyStored) == nil
+  }
   /// Ollama on this Mac: status for the agent's model (after a test) and for the Companion's recommended model.
   @Published private(set) var agentLocalStatus: TBDAgentModelSetup.LocalStatus?
   @Published private(set) var companionLocalStatus: TBDAgentModelSetup.LocalStatus?
@@ -230,6 +235,14 @@ final class TBDOnboardingController: ObservableObject {
     if target < step {
       while step > target { machine.back() }
     } else if target > step {
+      if step == .agent && cloudReadyToSave && saveCloudNow() {
+        // The saved route resolves; count it at once so Forward does not wait for the next check.
+        var c = checks
+        c.agentModelReady = true
+        c.agentModelName = cloud.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        c.agentCloud = cloud.provider.title
+        checks = c
+      }
       if !isDone(step) { skip(step) }
       machine.forward(checks)
     }
@@ -395,10 +408,14 @@ final class TBDOnboardingController: ObservableObject {
 
   /// Saves the cloud setting and makes it TBD's agent's route. There is no cheap test call for every provider (Bedrock
   /// signs requests with AWS); the first chat message checks it and shows the provider's own error.
-  func saveCloud() {
+  func saveCloud() { _ = saveCloudNow() }
+
+  /// Saves the shown cloud setting; true when it was saved.
+  @discardableResult
+  func saveCloudNow() -> Bool {
     let typed = cloudKey.trimmingCharacters(in: .whitespacesAndNewlines)
     let hasKey = !typed.isEmpty || (cloud.secretName != nil && cloudStore.hasKey(cloud.provider))
-    if let missing = cloud.missing(hasKey: hasKey) { cloudMessage = missing; return }
+    if let missing = cloud.missing(hasKey: hasKey) { cloudMessage = missing; return false }
     do {
       try cloudStore.save(cloud, key: typed)
       cloudKey = ""
@@ -408,8 +425,10 @@ final class TBDOnboardingController: ObservableObject {
       agentCheckDue = true
       restartAgent()
       Task { await refreshChecks() }
+      return true
     } catch {
       cloudMessage = error.localizedDescription
+      return false
     }
   }
 
@@ -544,7 +563,8 @@ struct TBDOnboardingView: View {
     [
       TBDStep("Welcome", nextLabel: "Start") { welcome },
       TBDStep("Workspace", nextLabel: nextLabel, optional: true, skipLabel: "No, not now", canAdvance: flow.isDone(.portal)) { portal },
-      TBDStep("TBD's agent", nextLabel: nextLabel, optional: true, skipLabel: "No, not now", canAdvance: flow.isDone(.agent)) { agent },
+      TBDStep("TBD's agent", nextLabel: flow.cloudReadyToSave ? "Save and continue" : nextLabel, optional: true, skipLabel: "No, not now",
+              canAdvance: flow.isDone(.agent) || flow.cloudReadyToSave) { agent },
       TBDStep("Permissions", nextLabel: nextLabel, optional: true, skipLabel: "Not now", canAdvance: flow.isDone(.permissions)) { permissionsStep },
       TBDStep("Models", nextLabel: nextLabel, optional: true, skipLabel: "Skip for now", canAdvance: flow.isDone(.models)) { models },
       TBDStep("Summary", nextLabel: "Open TBD") { summary },
