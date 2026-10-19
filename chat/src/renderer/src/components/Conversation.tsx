@@ -278,6 +278,21 @@ function AuthorizationCard({
 }
 
 
+/** A Connect call is waiting for the owner (C4). The approval opens in the system browser; TBD never approves a hold itself. */
+function HoldNotice({ block }: { block: Extract<Block, { kind: "hold" }> }): ReactNode {
+  return (
+    <div className="ask">
+      <div className="ask__title" style={{ marginBottom: 4 }}>{block.label}</div>
+      <div className="muted" style={{ marginBottom: 10 }}>The owner decides this in the app. TBD&apos;s agent repeats the call after the owner approves it.</div>
+      <div className="ask__options">
+        <button type="button" className="btn btn--primary" disabled={!block.url} onClick={() => block.url && void window.studio?.openExternal(block.url)}>
+          Open approval
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Conversation(): ReactNode {
   const {
     agents,
@@ -678,6 +693,7 @@ export function Conversation(): ReactNode {
                 <PeerActivity key={b.id} events={b.events} agentId={activeAgentId} blockId={b.id} />
               );
             if (b.kind === "authorization") return <AuthorizationCard key={b.id} block={b} />;
+            if (b.kind === "hold") return <HoldNotice key={b.id} block={b} />;
             if (b.kind === "question")
               return (
                 <QuestionCard

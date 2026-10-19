@@ -9,6 +9,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (m.type === "shutdown") return void setTimeout(() => process.exit(0), 300);
   if (m.type === "turn" && m.text === "quick") return out({ type: "done", id: m.id, sessionId: "sess-q", reply: "quick" });
   if (m.type === "turn" && m.text === "slow") return void setTimeout(() => out({ type: "done", id: m.id, sessionId: "sess-s", reply: "slow done" }), 900);
+  // Connect (C11): a held Connect call, and a Connect permission request with the agent's ask.
+  if (m.type === "turn" && m.text === "held") {
+    out({ type: "event", id: m.id, event: { kind: "held", tool: "mcp__tealbrick__connect__tools_call", holdId: "hold_7", expiresAt: "2026-10-20T10:00:00Z" } });
+    return out({ type: "done", id: m.id, sessionId: "sess-h", reply: "held" });
+  }
+  if (m.type === "turn" && m.text === "connect") {
+    (globalThis as any).connecting = m;
+    return out({ type: "permission_request", id: m.id, reqId: "p9", tool: "mcp__tealbrick__connect__tools_call", detail: "x", input: { tool: "GMAIL_SEND_EMAIL", arguments: {} }, connect: { op: "tools_call", tool: "GMAIL_SEND_EMAIL", account: "default", service: "Gmail", effect: "outward" } });
+  }
+  if (m.type === "permission" && (globalThis as any).connecting) {
+    const t = (globalThis as any).connecting;
+    return out({ type: "done", id: t.id, sessionId: "sess-c", reply: JSON.stringify({ allow: m.allow, message: m.message, remember: m.remember }) });
+  }
   if (m.type === "turn" && m.text === "ask") {
     (globalThis as any).asking = m;
     return out({ type: "question", id: m.id, reqId: "q1", questions: [{ question: "Which day?", options: [{ label: "Today" }, { label: "Yesterday" }] }] });

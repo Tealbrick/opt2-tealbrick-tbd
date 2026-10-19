@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, HelperToAgent, SelfTestTools } from "../agent/protocol";
+import type { AgentConfig, AgentEvent, AgentModel, AgentQuestion, AgentToHelper, ConnectAsk, HelperToAgent, SelfTestTools } from "../agent/protocol";
 import type { ContentBlock } from "../shared/message";
 
 /**
@@ -141,6 +141,8 @@ export interface TurnCallbacks {
   onTurn?(turn: { sessionId: string; turnId?: string }): void;
   /** The agent asks the person (AskUserQuestion); answer with `answer(reqId, …)`. */
   onQuestion?(question: { reqId: string; questions: AgentQuestion[] }): void;
+  /** A Connect call of this turn is waiting for the owner's approval (the Chat shows a link). */
+  onHeld?(held: { tool: string; holdId: string; expiresAt: string }): void;
 }
 
 export interface DefaultAgentDeps {
@@ -151,8 +153,12 @@ export interface DefaultAgentDeps {
   model(): Promise<AgentRoute>;
   /** Everything else the agent needs; no credentials. */
   config(): Promise<Omit<AgentConfig, "model">>;
-  /** Decide one tool call (file policy + person consent, SEC-04); message is shown to the agent on deny. */
-  permission(req: { tool: string; detail: string; input: Record<string, unknown> }): Promise<{ allow: boolean; message?: string }>;
+  /**
+   * Decide one tool call (file policy + person consent, SEC-04); message is shown to the agent on deny.
+   * `connect` is set for a Connect call (C11): the person's Always/Never rules or the Connect card decide it.
+   * `remember` tells the agent which standing choice decided ("always" / "never").
+   */
+  permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }>;
   /** For tests: spawn replacement. */
   spawnProcess?: typeof spawn;
 }
@@ -229,11 +235,12 @@ export function createDefaultAgent(deps: DefaultAgentDeps) {
       else if (e.kind === "reset") t.onReset?.();
       else if (e.kind === "activity") t.onActivity(e.label === null ? null : scrub(e.label));
       else if (e.kind === "session") { t.sessionId = e.sessionId; t.onTurn?.({ sessionId: e.sessionId, turnId: m.id }); }
+      else if (e.kind === "held" && typeof e.holdId === "string" && typeof e.expiresAt === "string") t.onHeld?.({ tool: String(e.tool), holdId: e.holdId, expiresAt: e.expiresAt });
     } else if (m.type === "permission_request") {
       // The consent card shows detail and input: scrubbed like every other text from the agent.
       const input = JSON.parse(scrub(JSON.stringify(m.input ?? {}))) as Record<string, unknown>;
-      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input })
-        .then((d) => send({ type: "permission", reqId: m.reqId, allow: d.allow, message: d.message }))
+      void deps.permission({ tool: m.tool, detail: scrub(m.detail), input, ...(m.connect ? { connect: m.connect } : {}) })
+        .then((d) => send({ type: "permission", reqId: m.reqId, allow: d.allow, message: d.message, ...(d.remember ? { remember: d.remember } : {}) }))
         .catch(() => send({ type: "permission", reqId: m.reqId, allow: false }));
     } else if (m.type === "question") {
       const t = turns.get(m.id);

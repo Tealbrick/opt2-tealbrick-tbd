@@ -61,7 +61,8 @@ export type HelperToAgent =
    *  A harness that can report its tool families answers `done.selfTest`. */
   | { type: "turn"; id: string; text: string; content?: ContentBlock[]; sessionId?: string; selfTest?: boolean }
   | { type: "cancel"; id: string }
-  | { type: "permission"; reqId: string; allow: boolean; message?: string }
+  /** `remember`: the person's standing choice on a Connect card ("Always allow" / "Never allow"), or a remembered rule that decided. */
+  | { type: "permission"; reqId: string; allow: boolean; message?: string; remember?: "always" | "never" }
   /** The person's answers, keyed by question text; null = not answered (declined, stopped, timed out). */
   | { type: "answer"; reqId: string; answers: Record<string, string> | null }
   | { type: "shutdown" };
@@ -70,7 +71,9 @@ export type AgentEvent =
   | { kind: "delta"; text: string }
   | { kind: "reset" }
   | { kind: "activity"; label: string | null }
-  | { kind: "session"; sessionId: string };
+  | { kind: "session"; sessionId: string }
+  /** A Connect call is waiting for the owner's approval (C4): the Chat shows "Waiting for owner approval" with a link. */
+  | { kind: "held"; tool: string; holdId: string; expiresAt: string };
 
 /**
  * What a self-test turn reports about the tool families (WP-HARNESS L3, check 4): the families the config asked for,
@@ -82,10 +85,29 @@ export interface SelfTestTools {
   probes: Record<string, string | null>;
 }
 
+/**
+ * What the agent process knows about a Connect call that needs the person's card (main/connectConsent.ts). The helper
+ * reads the account and tool from the call itself for its rules; the agent adds the tool's effect, which only its
+ * search results tell.
+ */
+export interface ConnectAsk {
+  /** The Connect op ("tools_call", "channel_send", …). */
+  op: string;
+  /** The inner tool of a `tools_call`, else the op. The rule key. */
+  tool: string;
+  /** The account label the call names, or "default". The rule key. */
+  account: string;
+  /** For the card: "Gmail", "Buzz", "Chat channel". */
+  service: string;
+  /** read | write | outward | destructive | money | unknown. */
+  effect: string;
+}
+
 export type AgentToHelper =
   | { type: "ready" }
   | { type: "event"; id: string; event: AgentEvent }
-  | { type: "permission_request"; id: string; reqId: string; tool: string; detail: string; input: Record<string, unknown> }
+  /** `connect` is set for a Connect call (the card is built in the helper from `input`). */
+  | { type: "permission_request"; id: string; reqId: string; tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }
   | { type: "question"; id: string; reqId: string; questions: AgentQuestion[] }
   | { type: "done"; id: string; sessionId: string; reply: string; selfTest?: SelfTestTools }
   | { type: "error"; id?: string; message: string };
@@ -101,6 +123,8 @@ export const AGENT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash", "We
  * (which decides its own calls) and AskUserQuestion (answered on a question card) pass; every built-in file, shell and web tool goes to the
  * helper's file policy: free inside the agent workspace and granted folders, secrets refused,
  * everything else asks the person.
+ * Connect calls are the exception inside `mcp__tealbrick__`: their consent (reads free, everything else on the card, the
+ * person's Always/Never rules) is main/connectConsent.ts, applied by both harnesses before this check.
  */
 export function needsPermission(tool: string): boolean {
   return !(tool === ASK_TOOL || tool.startsWith("mcp__companion__") || tool.startsWith("mcp__listening__") || tool.startsWith("mcp__tealbrick__"));

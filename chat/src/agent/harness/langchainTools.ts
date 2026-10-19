@@ -5,7 +5,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import { z } from "zod";
 import type { ListeningToolDef } from "../listeningDefs";
-import type { AgentQuestion, AgentToHelper, SelfTestTools } from "../protocol";
+import type { AgentQuestion, AgentToHelper, ConnectAsk, SelfTestTools } from "../protocol";
 import type { ChatModelLike, GraphState, ToolSeam } from "./langchainGraph";
 
 /**
@@ -44,6 +44,11 @@ export interface PermissionPolicy {
   needsPermission(tool: string): boolean;
   /** protocol.describeToolCall: one line for the consent card. */
   describe(tool: string, input: Record<string, unknown>): string;
+  /**
+   * Connect consent (main/connectConsent.ts): the ask for a Connect call that needs the person's card, else undefined.
+   * Such a call goes to the helper even though `needsPermission` passes the Teal Brick tools.
+   */
+  connect?(tool: string, input: Record<string, unknown>): ConnectAsk | undefined;
 }
 
 export interface Decision { allow: boolean; message?: string }
@@ -66,9 +71,10 @@ export function createInteractions(send: (m: AgentToHelper) => void, policy: Per
   return {
     /** Decide one tool call: free when `needsPermission` says so, else the person decides on the consent card. */
     async gate(turnId: string, name: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<Decision> {
-      if (!policy.needsPermission(name)) return { allow: true };
+      const connect = policy.connect?.(name, input);
+      if (!connect && !policy.needsPermission(name)) return { allow: true };
       const reqId = `p${++next}`;
-      send({ type: "permission_request", id: turnId, reqId, tool: name, detail: policy.describe(name, input), input });
+      send({ type: "permission_request", id: turnId, reqId, tool: name, detail: policy.describe(name, input), input, ...(connect ? { connect } : {}) });
       return wait(permissions, reqId, signal, { allow: false, message: "Turn stopped." });
     },
     /** Ask the person; `null` = not answered (declined, stopped, timed out). */
@@ -116,6 +122,8 @@ export interface SeamOptions {
   ungated?: ReadonlySet<string>;
   /** Called when a tool call throws; lets the owner drop an MCP server whose connection is gone. */
   onToolError?(name: string, error: unknown): void;
+  /** Called with every tool result (before it is cut): Connect consent learns tool effects and holds from it. */
+  observe?(name: string, input: Record<string, unknown>, result: ToolMessage): void;
 }
 
 const failed = (id: string, name: string, text: string) => new ToolMessage({ tool_call_id: id, name, content: capText(text), status: "error" });
@@ -150,7 +158,9 @@ export function createToolSeam(options: SeamOptions): ToolSeam {
         }
         try {
           const result = await found.invoke({ id, name: call.name, args, type: "tool_call" }, config);
-          messages.push(capped(ToolMessage.isInstance(result) ? result : new ToolMessage({ tool_call_id: id, name: call.name, content: typeof result === "string" ? result : JSON.stringify(result) })));
+          const message = ToolMessage.isInstance(result) ? result : new ToolMessage({ tool_call_id: id, name: call.name, content: typeof result === "string" ? result : JSON.stringify(result) });
+          try { options.observe?.(call.name, args, message); } catch { /* an observer never stops a tool result */ }
+          messages.push(capped(message));
         } catch (error) {
           if (config.signal?.aborted) break; // the turn was stopped; the graph ends it
           options.onToolError?.(call.name, error);

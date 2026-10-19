@@ -211,6 +211,19 @@ function ensureListeners(
     get().persist();
   });
 
+  window.studio.onHeld(({ streamId, label, holdId, url }) => {
+    const agentId = streamOwners.get(streamId);
+    if (!agentId) return;
+    // One notice per hold; it stays in the thread so the link outlives the turn.
+    const id = `hold-${holdId}`;
+    set((s) => {
+      const conv = s.conversations[agentId] ?? [];
+      if (conv.some((b) => b.id === id)) return {};
+      return { conversations: { ...s.conversations, [agentId]: [...conv, { kind: "hold", id, at: Date.now(), label, holdId, ...(url ? { url } : {}) }] } };
+    });
+    get().persist();
+  });
+
   window.studio.onAuthorization(({ streamId, event }) => {
     const agentId = streamOwners.get(streamId);
     if (!agentId) return;

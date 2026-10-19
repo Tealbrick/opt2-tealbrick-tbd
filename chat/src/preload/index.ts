@@ -45,6 +45,11 @@ const studio: StudioApi = {
     ipcRenderer.on("studio:local-done", listener);
     return () => ipcRenderer.off("studio:local-done", listener);
   },
+  onHeld: (handler) => {
+    const listener = (_e: unknown, payload: Parameters<typeof handler>[0]): void => handler(payload);
+    ipcRenderer.on("studio:held", listener);
+    return () => ipcRenderer.off("studio:held", listener);
+  },
   onCursor: (handler) => {
     const listener = (_e: unknown, payload: { streamId: string; index: number }): void => handler(payload);
     ipcRenderer.on("studio:cursor", listener);
