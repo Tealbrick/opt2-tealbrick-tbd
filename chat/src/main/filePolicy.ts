@@ -69,7 +69,7 @@ export function isSecret(path: string, ctx: PolicyContext): string | null {
   if (within(path, ctx.tbdData) && !within(path, ctx.workspace)) return "TBD's own data";
   for (const a of ctx.alwaysDenied ?? []) if (within(path, a)) return "data TBD's agent must not use";
   for (const d of SECRET_DIRS) if (within(path, join(ctx.home, d))) return d;
-  for (const f of SECRET_FILES) if (path === join(ctx.home, f)) return f;
+  for (const f of SECRET_FILES) if (fold(path) === fold(join(ctx.home, f))) return f;
   for (const part of path.split(sep)) for (const re of SECRET_NAMES) if (re.test(part)) return part;
   return null;
 }
@@ -93,15 +93,59 @@ export function targetPaths(tool: string, input: Record<string, unknown>, ctx: P
 }
 
 /**
- * True when `text` names `path` itself or something inside it: the match must end at a path boundary, so
- * ".../com.tealbrick.desktop" does not match ".../com.tealbrick.desktop-agent/..." (a different folder).
+ * True when `text` names `path`, something inside it, or a glob over it. Only a following NAME character means a
+ * different folder: ".../com.tealbrick.desktop" does not match ".../com.tealbrick.desktop-agent/...", but
+ * ".../TBD/", ".../TBD*", ".../TB[D]", ".../TBD{,}" and a quoted ".../TBD" all match.
  */
 function mentionsPath(text: string, path: string): boolean {
   for (let i = text.indexOf(path); i >= 0; i = text.indexOf(path, i + 1)) {
     const next = text[i + path.length];
-    if (next === undefined || next === "/" || /[\s'"`;|&()<>]/.test(next)) return true;
+    if (next === undefined || !/[A-Za-z0-9_.-]/.test(next)) return true;
   }
   return false;
+}
+
+/**
+ * True when `text` has a glob in the last segment that can name `path`: ".../TB[D]/x", ".../T*", ".../TB?" reach
+ * ".../TBD" without spelling it. Only the segment right after the protected folder's parent is checked.
+ */
+function globReaches(text: string, path: string): boolean {
+  const parent = path.slice(0, path.lastIndexOf("/") + 1);
+  const name = path.slice(parent.length);
+  if (!parent || !name) return false;
+  for (let i = text.indexOf(parent); i >= 0; i = text.indexOf(parent, i + 1)) {
+    const segment = /^[^/'"`;|&()<>\s]*/.exec(text.slice(i + parent.length))?.[0] ?? "";
+    if (!/[*?[{]/.test(segment)) continue;
+    try {
+      if (globToRegExp(segment).test(name)) return true;
+    } catch {
+      return true;   // an odd glob next to a protected folder: deny rather than guess
+    }
+  }
+  return false;
+}
+
+/** A shell glob segment as an anchored RegExp: * ? [..] [!..] {a,b}. */
+function globToRegExp(glob: string): RegExp {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i]!;
+    if (ch === "*") re += "[^/]*";
+    else if (ch === "?") re += "[^/]";
+    else if (ch === "[") {
+      const end = glob.indexOf("]", i + 1);
+      if (end < 0) { re += "\\["; continue; }
+      const body = glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\");
+      re += `[${body}]`;
+      i = end;
+    } else if (ch === "{") {
+      const end = glob.indexOf("}", i + 1);
+      if (end < 0) { re += "\\{"; continue; }
+      re += `(?:${glob.slice(i + 1, end).split(",").map((alt) => alt.replace(/[.+^$()|\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]")).join("|")})`;
+      i = end;
+    } else re += ch.replace(/[.+^$()|\\\]}]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`);
 }
 
 /** Paths a shell command names (best effort, for the deny list only). */
@@ -109,7 +153,8 @@ export function commandMentionsSecret(command: string, ctx: PolicyContext): stri
   // Whole protected paths, also when they contain spaces (quoted or escaped).
   const flat = fold(command.replace(/\\ /g, " "));
   for (const d of [ctx.tbdData, ...(ctx.alwaysDenied ?? []), ...SECRET_DIRS.map((x) => join(ctx.home, x)), ...SECRET_FILES.map((x) => join(ctx.home, x))]) {
-    if ([d, d.replace(ctx.home, "~"), d.replace(ctx.home, "$HOME")].some((form) => mentionsPath(flat, fold(form)))) return d.replace(ctx.home, "~");
+    const forms = [d, d.replace(ctx.home, "~"), d.replace(ctx.home, "$HOME"), d.replace(ctx.home, "${HOME}")];
+    if (forms.some((form) => mentionsPath(flat, fold(form)) || globReaches(flat, fold(form)))) return d.replace(ctx.home, "~");
   }
   for (const token of command.split(/[\s'"=;|&<>()]+/)) {
     if (!token || !(token.startsWith("/") || token.startsWith("~") || token.includes("/") || token.startsWith("."))) continue;

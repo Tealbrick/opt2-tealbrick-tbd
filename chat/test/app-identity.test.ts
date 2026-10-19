@@ -40,6 +40,12 @@ test("the agent never reads or lists the archived v1 TBD folders or the other id
       assert.equal(decide("Bash", { command: `ls '${a}'` }, c).kind, "deny", a);
     }
     for (const a of denied) assert.ok(sandboxSettings(c).filesystem.denyRead.includes(a), a);
+    // Globs and quoting over a protected folder are mentions too (review WP1 re-check).
+    const v1 = join(support, "TBD");
+    for (const cmd of [`cat ${v1}*/x`, `cat ${support}/TB[D]/x`, `cat ${v1}?/x`, `cat ${v1}{,}/x`, `ls ${data}*`, `cat "${v1}"`, `(cat ${v1})`,
+      `cat \${HOME}/Library/Application\\ Support/TBD/x`]) {
+      assert.equal(decide("Bash", { command: cmd }, c).kind, "deny", cmd);
+    }
     if (process.platform === "darwin") {
       // Case-insensitive file system: other spellings of the archived folders are the same folders.
       assert.equal(decide("Read", { file_path: join(support, "tbd/Companion/chunks.sqlite") }, c).kind, "deny");
@@ -60,6 +66,6 @@ test("the agent's workspace stays usable: Read, shell and the sandbox (review WP
     assert.equal(decide("Read", { file_path: join(workspace, "notes.md") }, c).kind, "allow");
     assert.notEqual(decide("Bash", { command: `ls '${workspace}'` }, c).kind, "deny");
     const deny = sandboxSettings(c).filesystem.denyRead;
-    for (const d of deny) assert.ok(!(workspace === d || workspace.startsWith(d + "/")), `the sandbox must not deny the workspace via ${d}`);
+    for (const d of deny) assert.ok(!(workspace === d || workspace.startsWith(`${d}/`)), `the sandbox must not deny the workspace via ${d}`);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
