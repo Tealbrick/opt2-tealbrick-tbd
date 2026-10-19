@@ -130,7 +130,11 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     // Isolation: the helper gets an allow-listed environment, never the app's.
     let inherited = ProcessInfo.processInfo.environment
     var env: [String: String] = ["TBD_CHAT_DATA": data.path, "HOME": inherited["HOME"] ?? NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
-    for key in ["TMPDIR", "LANG", "LC_ALL", "TBD_PORTAL_URL", "TBD_CHAT_DEBUG_STREAM", "TBD_SHAPE_LOG"] { if let v = inherited[key] { env[key] = v } }
+    for key in ["TMPDIR", "LANG", "LC_ALL", "TBD_PORTAL_URL", "TBD_CHAT_DEBUG_STREAM"] { if let v = inherited[key] { env[key] = v } }
+    #if DEBUG
+      // C282 (WP1b) live proof by QA (TBD Dev only): the plan reads' field names and counts, never values.
+      if inherited["TBD_SHAPE_LOG"] == "1" { env["TBD_SHAPE_LOG"] = "1" }
+    #endif
     // Paths the default agent needs: its bundle and the harness-local tool CLIs (C5).
     env["TBD_RESOURCES"] = resources.appendingPathComponent("Chat").path
     // TBD's agent works NEXT to the app's data ("<dataFolder>-agent"; chat/src/main/appIdentity.ts agentFolder), never
@@ -405,13 +409,13 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
 }
 
 /// Redacted, error-only log of the Chat helper's stderr at ~/Library/Logs/<dataFolder>/chat-helper.log.
-/// Never records tokens or message content: only error lines (and, with TBD_SHAPE_LOG=1, `[helper:shape]` lines that
-/// hold field names and counts only — C282 proof), redacted and truncated.
+/// Never records tokens or message content: only error lines, redacted and truncated. TBD Dev (DEBUG) with
+/// TBD_SHAPE_LOG=1 also keeps `[helper:shape]` lines (field names and counts only — C282 proof); Release never does.
 final class TBDHelperLog: @unchecked Sendable {
   static let shared = TBDHelperLog()
   private let queue = DispatchQueue(label: "com.tealbrick.desktop.chat-helper-log")
   private let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/" + TBDIdentity.dataFolder + "/chat-helper.log")
-  private static let errorLine = try! NSRegularExpression(pattern: #"\[helper:error\]|\[helper:shape\]|\b[A-Za-z]*Error\b|[Uu]nhandled|[Uu]ncaught|\bfatal\b|^Node\.js v"#)
+  private static let errorLine = try! NSRegularExpression(pattern: #"\[helper:error\]|\b[A-Za-z]*Error\b|[Uu]nhandled|[Uu]ncaught|\bfatal\b|^Node\.js v"#)
   private static let redactions: [(NSRegularExpression, String)] = [
     (#"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.?[A-Za-z0-9_-]*"#, "[jwt]"),
     (#"(?i)\b(bearer|basic)\s+\S+"#, "$1 [redacted]"),
@@ -436,7 +440,7 @@ final class TBDHelperLog: @unchecked Sendable {
     guard let text = String(data: line, encoding: .utf8)?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return }
     #if DEBUG
       // TBD_SHAPE_LOG=1 (TBD Dev): the helper's shape-only lines (field names and counts) for QA's live proof (C282).
-      // Release keeps error lines only, so the variable has no effect there.
+      // Release neither passes the variable to the helper nor keeps these lines (review dev.12 #1).
       if text.hasPrefix("[helper:shape]") { write(Self.redact(text)); return }
     #endif
     guard Self.errorLine.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil else { return }

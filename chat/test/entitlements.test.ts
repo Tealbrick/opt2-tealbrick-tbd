@@ -107,3 +107,48 @@ test("fail-safe: checkShape accepts the contract's rows and refuses others", () 
   assert.throws(() => checkShape({ items: [] }, []), /licences/);
   assert.throws(() => checkShape([], [{ product: "rules", ws: WS, state: "running" }]), /instances/);
 });
+
+test("fail-safe: no workspace selected is unknown, not locked (review dev.12 #2)", async () => {
+  const ent = createEntitlements({ licences: async () => [], instances: async () => ({ items: [] }) });
+  const s = await ent.refresh(null);
+  assert.equal(s.ws, null);
+  for (const app of Object.values(s.apps)) assert.equal(app.access, "unknown");
+  assert.equal(availabilityText("knowledge", s.apps.knowledge.access), null);
+  // Before any read the cache is unknown too.
+  assert.equal(createEntitlements({ licences: async () => [], instances: async () => ({ items: [] }) }).current().apps.knowledge.access, "unknown");
+});
+
+test("a failed read is retried after 1 min, a good one after 10 min, a new workspace at once (review dev.12 #7)", async () => {
+  let t = 1_000_000;
+  let fail = true;
+  const ent = createEntitlements({
+    licences: async () => { if (fail) throw new Error("503"); return [licence("rules")]; },
+    instances: async () => ({ items: [instance("rules")] }), now: () => t,
+  });
+  await ent.refresh(WS);
+  assert.equal(ent.isStale(WS, t + 30_000), false, "no retry storm during an outage");
+  assert.equal(ent.isStale(WS, t + 61_000), true);
+  fail = false;
+  t += 61_000;
+  await ent.refresh(WS);
+  assert.equal(ent.isStale(WS, t + 5 * 60_000), false);
+  assert.equal(ent.isStale(WS, t + 11 * 60_000), true);
+  assert.equal(ent.isStale("ws_2", t + 1), true, "a workspace switch reads at once");
+});
+
+test("a late answer for a workspace the person left never overwrites the newer one (review dev.12 #8)", async () => {
+  let releaseA: () => void = () => {};
+  const ent = createEntitlements({
+    licences: async () => [licence("rules")],
+    instances: async (ws) => {
+      if (ws === WS) await new Promise<void>((r) => { releaseA = r; });
+      return { items: ws === WS ? [instance("rules")] : [] };
+    },
+  });
+  const a = ent.refresh(WS);
+  await new Promise((r) => setTimeout(r, 5));
+  await ent.refresh("ws_2");
+  releaseA();
+  await a;
+  assert.equal(ent.current().ws, "ws_2");
+});

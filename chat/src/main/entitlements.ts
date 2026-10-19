@@ -35,6 +35,8 @@ export interface EntitlementSnapshot {
   ws: string | null;
   /** ms since epoch of the last successful read; 0 = never read. */
   fetchedAt: number;
+  /** ms since epoch of the last attempt (success or failure); paces retries during an outage (review dev.12 #7). */
+  attemptedAt?: number;
   /** Present when the last refresh failed: the apps below are the last good read (or all locked). */
   error?: string;
   apps: Record<GatedApp, AppEntitlement>;
@@ -108,23 +110,37 @@ export function createEntitlements(deps: {
   log?: (line: string) => void;
 }) {
   const now = deps.now ?? Date.now;
-  let last: EntitlementSnapshot = emptySnapshot(null);
+  let last: EntitlementSnapshot = unknownSnapshot(null, "not read yet");
+  let latest = 0;
   return {
     current: (): EntitlementSnapshot => last,
+    /** Read again when the workspace changed, after 10 min, or (after a failure) after 1 min — not on every poll. */
+    isStale(ws: string | null, at = now()): boolean {
+      if (last.ws !== ws) return true;
+      const since = at - (last.attemptedAt ?? last.fetchedAt);
+      return since > (last.error ? 60_000 : 10 * 60_000);
+    },
     async refresh(ws: string | null): Promise<EntitlementSnapshot> {
+      const request = ++latest;
       if (!ws) {
-        last = emptySnapshot(null);
+        // No workspace selected: nothing is known, nothing is locked (review dev.12 #2).
+        last = { ...unknownSnapshot(null, "no workspace selected"), attemptedAt: now() };
         return last;
       }
+      let next: EntitlementSnapshot;
       try {
         const [licences, instances] = await Promise.all([deps.licences(), deps.instances(ws)]);
         deps.log?.(`entitlements shape: licences ${shapeOf(licences)} instances ${shapeOf(instances?.items)}`);
         checkShape(licences, instances?.items);
-        last = computeEntitlements(ws, licences, instances.items, now());
+        next = computeEntitlements(ws, licences, instances.items, now());
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        last = last.ws === ws && last.fetchedAt > 0 ? { ...last, error: message } : unknownSnapshot(ws, message);
+        next = last.ws === ws && last.fetchedAt > 0 ? { ...last, error: message } : unknownSnapshot(ws, message);
       }
+      next = { ...next, attemptedAt: now() };
+      // A late answer for a workspace the person already left never overwrites the newer one (review dev.12 #8).
+      if (request !== latest) return next;
+      last = next;
       return last;
     },
   };

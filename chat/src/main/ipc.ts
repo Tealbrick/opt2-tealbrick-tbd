@@ -88,9 +88,7 @@ export function registerIpc(): void {
   ipcMain.handle("studio:entitlements", withPerson(async (_e: unknown, opts?: { refresh?: boolean }) => {
     const ent = getServices().entitlements;
     const ws = selectedPortalWorkspace() || null;
-    const cur = ent.current();
-    const stale = cur.ws !== ws || Date.now() - cur.fetchedAt > 10 * 60_000;
-    return opts?.refresh || stale ? ent.refresh(ws) : cur;
+    return opts?.refresh || ent.isStale(ws) ? ent.refresh(ws) : ent.current();
   }));
   ipcMain.handle("studio:session", withPerson(async () => {
     const s = publicPersonSession(getServices().portal.session());

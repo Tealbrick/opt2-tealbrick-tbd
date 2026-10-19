@@ -134,7 +134,9 @@ public final class TBDListeningRuntime: ObservableObject {
     public var saveToKnowledge: TBDKnowledgeSaver?
     /// Set by the host from the workspace's entitlements (C282): nil = Knowledge is available, else the sentence
     /// ("Available with Knowledge."). Locks the button and the automatic saves.
-    public var knowledgeAvailability: String? = "Available with Knowledge." {
+    /// nil until the host has read the plan: an unread plan never locks Save to Knowledge (C282 fail-safe, review
+    /// dev.12 #3); Core still refuses an unpaid save.
+    public var knowledgeAvailability: String? = nil {
         didSet { context?.knowledge.availability = knowledgeAvailability }
     }
 

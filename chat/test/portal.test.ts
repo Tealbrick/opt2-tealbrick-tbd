@@ -146,3 +146,16 @@ test("pending holds are counts per app from instances.list", async () => {
     assert.deepEqual(await p.pendingHolds("ws_1"), [{ product: "connect", count: 2 }]);
   } finally { await portal.close(); }
 });
+
+test("C282 fail-safe: a licence list longer than 10 pages is an error (never a short list read as 'not paid')", async () => {
+  const portal = await fakePortal((req, _b, res) => {
+    if (req.url?.startsWith("/api/v1/licences?assigned=true&limit=200")) return json(res, 200, { items: [{ id: "lic", product: "rules" }], nextCursor: "more" });
+    err(res, 404, "not_found");
+  });
+  const store = memoryStore();
+  store.save({ token: "tbo_a", sessionId: "osn_a", expiresAt: Date.now() + 60_000, email: null });
+  const p = createPortal({ origin: portal.origin, store, machineLabel: "m" });
+  try {
+    await assert.rejects(p.licences(), /longer than 10 pages/);
+  } finally { await portal.close(); }
+});

@@ -229,6 +229,8 @@ export function createPortal(deps: PortalDeps) {
         cursor = list.nextCursor;
         if (!cursor) break;
       }
+      // More than 10 pages: an incomplete list must not read as "not paid" (review dev.12 #5) → the caller's unknown.
+      if (cursor) throw new Error("licence list longer than 10 pages");
       return items;
     },
     /** Harness labels for the agent cards ("Claude Code", …). */

@@ -148,6 +148,14 @@ final class TBDOnboardingController: ObservableObject {
   var portalAnswer: TBDOnboardingAnswer? { choices.portal ?? (checks.signedIn ? .yes : nil) }
   var agentAnswer: TBDOnboardingAnswer? { choices.agent ?? (checks.agentModelReady ? .yes : nil) }
 
+  /// The person's own Portal (the active Portal profile's issuer: portal.tealbrick.com, dev.tealbrick.com or a
+  /// self-hosted Portal; review dev.12 #4). The public Portal only when no profile is loaded yet.
+  var portalURL: URL {
+    let issuer = account.profiles.first { $0.id == account.activeProfile }?.issuer ?? ""
+    if let url = URL(string: issuer), ["https", "http"].contains(url.scheme ?? "") { return url }
+    return URL(string: "https://portal.tealbrick.com")!
+  }
+
   /// Edit mode after the first run: back to the app without other changes (review dev.9 #8).
   var canCloseEdit: Bool { editing && machine.record.completed }
   func closeEdit() {
@@ -1050,7 +1058,7 @@ struct TBDOnboardingView: View {
       Button(line.action) {
         switch line.fix {
         case .step(let step): flow.open(step)
-        case .portal: if let url = URL(string: "https://portal.tealbrick.com") { NSWorkspace.shared.open(url) }
+        case .portal: NSWorkspace.shared.open(flow.portalURL)
         }
       }
       .buttonStyle(TBDButtonStyle(line.on || line.neutral ? .quiet : .secondary))
