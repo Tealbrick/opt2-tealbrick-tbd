@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import TBDDesign
 import TBDListening
+import TBDModels
 
 /// Navigation owns visibility only. Capture services remain owned by the app lifecycle.
 struct TBDWorkspaceView<Companion: View>: View {
@@ -142,12 +143,26 @@ struct TBDWorkspaceView<Companion: View>: View {
       }
       listening.start()
       await account.refresh()
+      await refreshEntitlements()
       while !Task.isCancelled {
         do { try await Task.sleep(for: .seconds(10)) } catch { return }
         await account.refresh()
+        await refreshEntitlements()
       }
     }
   }
+
+  /// C282: functions unlock with what the workspace paid for. The helper caches the read (10 min, or a new
+  /// workspace), so this 10-second call is cheap; a failed read keeps the helper's last good snapshot.
+  private func refreshEntitlements() async {
+    guard TBDAccountCoordinator.shared.signedIn else {
+      listening.knowledgeAvailability = TBDKnowledgeError.signIn.errorDescription
+      return
+    }
+    let value = try? await TBDChatRuntime.shared.accountCall("entitlements")
+    listening.knowledgeAvailability = TBDEntitlements(helperValue: value).availability(.knowledge)
+  }
+
 
   private func pending(_ title: String, detail: String) -> some View {
     VStack(spacing: 12) {

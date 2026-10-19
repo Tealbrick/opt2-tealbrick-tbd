@@ -9,6 +9,7 @@ import { app, nativeCall } from "../tbd/host";
 import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
 import { currentControlPlane } from "./controlPlanes";
 import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
+import { createEntitlements, type Entitlements } from "./entitlements";
 import { createAgentIdentity, type AgentConnection, type AgentIdentity, type AgentSigner, type Ed25519Jwk } from "./agentIdentity";
 import { createDefaultAgent, type DefaultAgent } from "./defaultAgent";
 import { askPerson } from "./asks";
@@ -191,6 +192,7 @@ function resourcesDir(): string { return process.env.TBD_RESOURCES ?? join(proce
 
 export interface Services {
   portal: Portal;
+  entitlements: Entitlements;
   agentIdentity: AgentIdentity;
   agent: DefaultAgent;
 }
@@ -236,7 +238,13 @@ export function getServices(): Services {
     },
     permission,
   });
-  services = { portal, agentIdentity, agent };
+  // C282: what the workspace paid for; TBD_SHAPE_LOG=1 logs the reads' field names and counts only (no values).
+  const entitlements = createEntitlements({
+    licences: () => portal.licences(),
+    instances: (ws) => portal.instances(ws),
+    log: process.env.TBD_SHAPE_LOG === "1" ? (line) => process.stderr.write(`[helper:shape] ${line}\n`) : undefined,
+  });
+  services = { portal, agentIdentity, agent, entitlements };
   return services;
 }
 

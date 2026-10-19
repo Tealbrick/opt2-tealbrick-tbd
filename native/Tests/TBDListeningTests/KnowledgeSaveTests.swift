@@ -146,6 +146,33 @@ final class KnowledgeSaveTests: XCTestCase {
         XCTAssertEqual(messages, ["Save to Knowledge failed for “Weekly planning”: Sign in to Teal Brick in TBD first."])
     }
 
+    /// C282: when Knowledge is not paid for (or not installed), nothing is sent: no automatic save, no manual save.
+    func testLockedKnowledgeBlocksManualAndAutomaticSaves() async throws {
+        let database = try TBDListeningDatabase(inMemory: ())
+        let (prefs, cleanup) = try preferences()
+        defer { cleanup() }
+        prefs.autoSaveLinksToKnowledge = true
+        var sent = 0
+        let controller = TBDKnowledgeController(database: database, preferences: prefs, saver: {
+            { _, _ in sent += 1; return TBDKnowledgeSaveResult(documentId: "doc_1", area: "inbox") }
+        }, suggest: { _ in [] })
+        controller.availability = "Available with Knowledge."
+        let link = transcript(kind: .url, url: "https://example.com/v")
+        try database.save(link)
+        XCTAssertFalse(controller.shouldAutoSave(link))
+        XCTAssertNil(controller.autoSave(link))
+        let request = TBDKnowledgeSaveRequest(transcriptId: link.id, title: "Weekly planning", body: "Hello team.", summary: "", tags: [])
+        do {
+            try await controller.save(request)
+            XCTFail("a locked Knowledge must refuse the save")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Available with Knowledge.")
+        }
+        XCTAssertEqual(sent, 0)
+        controller.availability = nil
+        XCTAssertTrue(controller.shouldAutoSave(link), "unlocked again: the automatic rule applies")
+    }
+
     func testManualSaveReportsWaitingStatusAndStoresTheDocument() async throws {
         let database = try TBDListeningDatabase(inMemory: ())
         let (prefs, cleanup) = try preferences()
