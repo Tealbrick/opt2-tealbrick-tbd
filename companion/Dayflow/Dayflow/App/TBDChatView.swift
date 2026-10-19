@@ -74,7 +74,9 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       // Read-only: agent directory (TBD agent) and the verified update feed for the native updater.
       "listAgents", "checkUpdate",
       // First-launch onboarding (WP-ONB step 2): pair TBD's agent card with the workspace (browser approves).
-      "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect"]
+      "agentConnection", "agentConnect", "awaitAgentConnect", "cancelAgentConnect",
+      // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
+      "restartAgent"]
     guard allowed.contains(channel) else { throw failure("Unsupported account operation") }
     start()
     guard ready || process?.isRunning == true else { throw failure(status) }
@@ -327,10 +329,10 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     return data
   }
 
-  /// The "agent" model route; must be an Anthropic connection with a key (Claude Agent SDK).
-  /// The error text is what Chat shows on the TBD row and in the composer ("No model set").
-  static func agentModel() throws -> TBDModelConfig {
-    try TBDAgentModelSetup.resolve(TBDModelRegistry())
+  /// TBD's agent route: the "agent" model route (an Anthropic connection with a key) or the person's cloud provider
+  /// (WP-HARNESS step 1, C287 (1)). The error text is what Chat shows on the TBD row and in the composer.
+  static func agentModel() throws -> TBDAgentRoute {
+    try TBDAgentModelSetup.resolveRoute(TBDModelRegistry())
   }
 
   private func native(_ method: String, args: [Any]) async throws -> Any {
@@ -371,9 +373,15 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
     case "agentModelStatus": _ = try Self.agentModel(); return NSNull()
     // The model id only (agent panel); never the key.
     case "agentModelName": return (try? Self.agentModel())?.model ?? NSNull()
+    // The helper's harness adapter builds the agent's environment from `env` (plain) and `secretEnv` (the person's
+    // own key, by variable name); `apiKey`/`baseUrl` keep the earlier shape for the Anthropic route.
     case "agentModel":
-      let config = try Self.agentModel()
-      return ["model": config.model, "baseUrl": config.baseURL.absoluteString, "apiKey": config.apiKey ?? ""]
+      let route = try Self.agentModel()
+      var answer: [String: Any] = ["harness": route.harness, "model": route.model, "env": route.environment,
+                                   "secretEnv": route.secrets, "source": route.source,
+                                   "apiKey": route.secrets["ANTHROPIC_API_KEY"] ?? ""]
+      if let base = route.baseURL { answer["baseUrl"] = base }
+      return answer
     // Person session (K3): Keychain item tealbrick.person, user presence where available.
     case "personLoad": return try TBDKeychain.personLoad(origin: text) ?? NSNull()
     case "personSave": try TBDKeychain.personSave(origin: text, value: args.dropFirst().first as? String ?? ""); return NSNull()
@@ -412,12 +420,15 @@ final class TBDHelperLog: @unchecked Sendable {
     (#"(?=[A-Za-z0-9+/_=-]*\d)(?=[A-Za-z0-9+/_=-]*[A-Za-z])[A-Za-z0-9+_=-][A-Za-z0-9+/_=-]{31,}"#, "[redacted]"),
   ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 
+  /// Redacts first, then truncates: a key that crosses the 600-character cut would otherwise leave a fragment too short
+  /// for the patterns (review dev.10 #8e). The 4000-character input cap only bounds the work; anything cut there is
+  /// beyond what is kept.
   static func redact(_ text: String) -> String {
-    var out = String(text.prefix(600))
+    var out = String(text.prefix(4000))
     for (pattern, template) in redactions {
       out = pattern.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: template)
     }
-    return out
+    return String(out.prefix(600))
   }
   /// One stderr line from the helper; kept only when it describes an error.
   func record(_ line: Data) {

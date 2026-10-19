@@ -30,11 +30,14 @@ public enum TBDAgentProvider: String, CaseIterable, Sendable {
 /// Why TBD's agent cannot answer yet. The texts are what Chat and Settings show.
 public enum TBDAgentModelError: Error, LocalizedError, Equatable {
     case noModel, notAnthropic, noKey
+    /// The cloud setting for TBD's agent misses a value (the sentence says which).
+    case cloudIncomplete(String)
     public var errorDescription: String? {
         switch self {
         case .noModel: return "No model set for TBD's agent. Set up a model in Settings → Models."
         case .notAnthropic: return "TBD's agent needs an Anthropic connection. Set up a model in Settings → Models."
         case .noKey: return "TBD's agent has no API key. Set up a model in Settings → Models."
+        case .cloudIncomplete(let what): return "TBD's agent cloud setting is not complete. \(what)"
         }
     }
 }

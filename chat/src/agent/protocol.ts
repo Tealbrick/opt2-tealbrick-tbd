@@ -18,7 +18,12 @@ export interface AgentModel {
   model: string;
   /** Anthropic API base URL (default https://api.anthropic.com). */
   baseUrl?: string;
+  /** Cloud provider settings (Bedrock, Vertex AI, Foundry; model pins), names from the fixed list in agent/modelEnv.ts only. */
+  env?: Record<string, string>;
+  /** Names (fixed list in agent/modelEnv.ts) of the person's model credential in the agent's own environment. */
+  secretNames?: string[];
 }
+
 
 export interface AgentConfig {
   model: AgentModel;

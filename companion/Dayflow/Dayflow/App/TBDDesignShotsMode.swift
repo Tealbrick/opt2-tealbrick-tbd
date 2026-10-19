@@ -396,10 +396,15 @@ private enum OnboardingShots {
       ("1-portal", .preview(step: .portal, choices: .init(portal: .yes), checks: .init())),
       ("2-agent", .preview(step: .agent, choices: .init(portal: .no, agent: .yes, agentRuntime: .local),
                            checks: .init(agentModelReady: true, agentModelName: "gpt-oss:20b"))),
+      ("2-agent-cloud", .preview(step: .agent, choices: .init(portal: .no, agent: .yes, agentRuntime: .cloud),
+                                 checks: { var c = TBDOnboardingChecks(agentModelReady: true, agentModelName: "us.anthropic.claude-sonnet-4-6")
+                                           c.agentCloud = "Amazon Bedrock"; return c }())),
       ("3-permissions", .preview(step: .permissions, choices: .init(portal: .no, agent: .no),
                                  checks: .init(granted: [.microphone, .notifications]), screenRequested: true)),
       ("4-models", .preview(step: .models, choices: .init(portal: .no, agent: .no),
                             checks: .init(granted: all, companionModelReady: true, companionModelName: "qwen3-vl:4b"))),
+      ("4-models-local", .preview(step: .models, choices: .init(portal: .no, agent: .no),
+                                  checks: .init(granted: all), companionLocal: .modelMissing("qwen3-vl:4b"))),
       ("5-summary-all-on", .preview(step: .summary, choices: .init(portal: .yes, agent: .yes), checks: allOn)),
       ("5-summary-some-skipped", .preview(step: .summary, choices: .init(portal: .yes, agent: .no), checks: some)),
     ]

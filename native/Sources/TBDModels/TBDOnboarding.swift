@@ -22,7 +22,7 @@ public enum TBDOnboardingStep: String, Codable, CaseIterable, Comparable, Sendab
 public enum TBDOnboardingAnswer: String, Codable, Sendable { case yes, no }
 
 /// How TBD's own agent (step 2) or the Companion model (step 4) runs.
-public enum TBDOnboardingRuntime: String, Codable, Sendable { case subscription, apiKey, local }
+public enum TBDOnboardingRuntime: String, Codable, Sendable { case subscription, apiKey, local, cloud }
 
 /// A macOS permission row of step 3.
 public enum TBDOnboardingPermission: String, Codable, CaseIterable, Sendable {
@@ -99,6 +99,8 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
     public var workspaceName: String?
     public var agentModelReady: Bool
     public var agentModelName: String?
+    /// Where TBD's agent's model runs when it is not this Mac or Anthropic ("Amazon Bedrock"…); nil otherwise.
+    public var agentCloud: String?
     public var agentPaired: Bool
     public var granted: Set<TBDOnboardingPermission>
     public var companionModelReady: Bool
@@ -124,7 +126,7 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
     }
     public static func == (a: Self, b: Self) -> Bool {
         a.signedIn == b.signedIn && a.workspaceName == b.workspaceName && a.agentModelReady == b.agentModelReady
-            && a.agentModelName == b.agentModelName && a.agentPaired == b.agentPaired && a.granted == b.granted
+            && a.agentModelName == b.agentModelName && a.agentCloud == b.agentCloud && a.agentPaired == b.agentPaired && a.granted == b.granted
             && a.companionModelReady == b.companionModelReady && a.companionModelName == b.companionModelName
             && a.speechModelOnDisk == b.speechModelOnDisk
             && a.companionDownload == b.companionDownload && a.speechDownload == b.speechDownload
@@ -312,6 +314,9 @@ public enum TBDOnboardingSummary {
         if c.agentModelReady && c.signedIn && !c.agentPaired {
             let ws = c.workspaceName ?? "your workspace"
             add("TBD's agent", false, "TBD's agent works on this Mac. It is not paired with \(ws) yet.", "Pair", .step(.agent))
+        } else if c.agentModelReady, let cloud = c.agentCloud {
+            let model = c.agentModelName ?? "a model"
+            add("TBD's agent", true, "TBD's agent runs on this Mac and uses \(model) on \(cloud).", "Change", .step(.agent))
         } else if c.agentModelReady {
             let model = c.agentModelName.map { " with \($0)" } ?? ""
             add("TBD's agent", true, "TBD's agent runs on this Mac\(model).", "Change", .step(.agent))

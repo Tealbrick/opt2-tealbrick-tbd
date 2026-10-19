@@ -218,6 +218,13 @@ final class TBDOnboardingTests: XCTestCase {
         XCTAssertEqual(lines.first?.text, "Not signed in. Chat shows only TBD's own agent.")
     }
 
+    func testSummaryNamesTheCloudProvider() {
+        var c = TBDOnboardingChecks(agentModelReady: true, agentModelName: "us.anthropic.claude-sonnet-4-6")
+        c.agentCloud = "Amazon Bedrock"
+        XCTAssertEqual(TBDOnboardingSummary.lines(c).first { $0.area == "TBD's agent" }?.text,
+                       "TBD's agent runs on this Mac and uses us.anthropic.claude-sonnet-4-6 on Amazon Bedrock.")
+    }
+
     func testSummarySaysWhenCaptureIsPaused() {
         let c = TBDOnboardingChecks(granted: [.screenRecording], capturePaused: true)
         XCTAssertEqual(TBDOnboardingSummary.lines(c).first { $0.area == "Screen activity" }?.text,
