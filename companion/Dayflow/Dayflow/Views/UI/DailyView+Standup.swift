@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import TBDDesign
+import TBDModels
 import SwiftUI
 import UserNotifications
 
@@ -230,6 +231,12 @@ extension DailyView {
       }
       .buttonStyle(TBDButtonStyle(.primary))
       .pointingHandCursorOnHover(reassertOnPressEnd: true)
+
+      // WP-ONB link: the setup's Models step (subscription CLI, API key or a model on this Mac).
+      Button("Open setup") {
+        NotificationCenter.default.post(name: .tbdOpenOnboarding, object: TBDOnboardingStep.models.rawValue)
+      }
+      .buttonStyle(TBDButtonStyle(.quiet))
     }
     .padding(16 * scale)
     .frame(maxWidth: .infinity, alignment: .leading)

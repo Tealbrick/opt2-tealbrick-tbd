@@ -1,4 +1,5 @@
 import TBDDesign
+import TBDModels
 import SwiftUI
 
 /// Presentation only. Tokens, refresh and issuer/workspace isolation stay in Chat's transport.
@@ -245,6 +246,11 @@ struct SettingsAccountSection: View {
         Text("Portal sign-in enables Chat and remote agents. Companion and Listen work without an account. macOS permissions are managed separately in Access.")
           .font(TBDTokens.Typography.hint)
           .foregroundStyle(TBDColor.muted)
+        // WP-ONB: the setup summary (what works, what is missing) with a button per area.
+        Button("Review setup") {
+          NotificationCenter.default.post(name: .tbdOpenOnboarding, object: TBDOnboardingStep.summary.rawValue)
+        }
+        .buttonStyle(TBDButtonStyle(.secondary))
       }
     }
     .task {
