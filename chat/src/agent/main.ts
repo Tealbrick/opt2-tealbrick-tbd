@@ -5,7 +5,9 @@ import { query, type HookCallback, type Options, type McpServerConfig, type Perm
 import { buildOptions, BRIDGE_SERVER_NAME, BRIDGE_TOOL_PATTERN } from "@opt2-tealbrick/harness-claude";
 import { AGENT_TOOLS, ASK_TOOL, describeToolCall, needsPermission, type AgentConfig, type AgentQuestion, type AgentToHelper, type ConnectAsk, type HelperToAgent } from "./protocol";
 import { createConnectConsent, heldOfResult } from "../main/connectConsent";
+import { isLocalConsentTool } from "../main/localConsent";
 import { connectPreToolUse } from "./connectHook";
+import { localPreToolUse } from "./localHook";
 import { createRequestIds } from "./requestIds";
 import type { ContentBlock } from "../shared/message";
 import { listeningServer } from "./listeningTools";
@@ -97,7 +99,7 @@ function options(c: AgentConfig, id: string, abort: AbortController, sessionId?:
     },
     canUseTool: async (tool, input, { signal }): Promise<PermissionResult> => {
       if (tool === ASK_TOOL) return ask(id, input, signal);
-      if (!needsPermission(tool)) return { behavior: "allow", updatedInput: input };
+      if (!needsPermission(tool) || config?.testNoLocalConsent === true) return { behavior: "allow", updatedInput: input };
       const decision = await requestPermission(id, tool, input, signal);
       return decision.allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: decision.message ?? "The person declined this action." };
     },
@@ -105,10 +107,10 @@ function options(c: AgentConfig, id: string, abort: AbortController, sessionId?:
 }
 
 /** Send one permission request to the helper and wait for the person's (or the rules') decision. A stopped turn says no. */
-async function requestPermission(id: string, tool: string, input: Record<string, unknown>, signal: AbortSignal, connectAsk?: ConnectAsk): Promise<{ allow: boolean; message?: string }> {
+async function requestPermission(id: string, tool: string, input: Record<string, unknown>, signal: AbortSignal, connectAsk?: ConnectAsk, check = false): Promise<{ allow: boolean; message?: string }> {
   if (signal.aborted) return { allow: false, message: "Turn stopped." };
   const reqId = ids.permission();
-  out({ type: "permission_request", id, reqId, tool, detail: describeToolCall(tool, input), input, ...(connectAsk ? { connect: connectAsk } : {}) });
+  out({ type: "permission_request", id, reqId, tool, detail: describeToolCall(tool, input), input, ...(connectAsk ? { connect: connectAsk } : {}), ...(check ? { check: true } : {}) });
   const decision = await new Promise<{ allow: boolean; message?: string }>((resolve) => {
     permissions.set(reqId, resolve);
     signal.addEventListener("abort", () => resolve({ allow: false, message: "Turn stopped." }), { once: true });
@@ -137,6 +139,17 @@ function connectHooks(id: string, existing: NonNullable<Options["hooks"]>): NonN
         hooks: [connectPreToolUse({
           route: (tool, input) => connect.routeOf(tool, input),
           request: (tool, input, signal, ask) => requestPermission(id, tool, input, signal, ask),
+        }) as unknown as HookCallback],
+      },
+      // Local actions (shell, file writes and edits, web): is the call refused by a protected location or the person's Never?
+      // The SDK runs read-only commands without asking canUseTool; this check still sees them. It never allows (localHook.ts).
+      {
+        matcher: "Bash|WebFetch|WebSearch|Write|Edit|MultiEdit|NotebookEdit",
+        timeout: 300,
+        hooks: [localPreToolUse({
+          isLocal: isLocalConsentTool,
+          check: (tool, input, signal) => requestPermission(id, tool, input, signal, undefined, true),
+          disabled: () => config?.testNoLocalConsent === true,
         }) as unknown as HookCallback],
       },
     ],

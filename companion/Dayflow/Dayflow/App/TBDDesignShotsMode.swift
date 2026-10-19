@@ -123,6 +123,8 @@
       let wall = AgentWallShotsSeed.stores()
       // Connectors (C11): seeded states, frozen stores, no helper call and no Portal.
       let connectors = ConnectorsShotsSeed.states()
+      // Access (dev.17, C13 local): the choices for TBD's agent on this Mac, seeded and frozen.
+      let access = LocalChoicesShotsSeed.states()
 
       let main = CGSize(width: 1280, height: 800)
       let wide = CGSize(width: 1600, height: 1000)
@@ -144,13 +146,23 @@
         for tab in settingsTabs {
           // Connectors: the seeded "accounts" state (mixed access and remembered choices), never the live store.
           let seeded = tab == "connectors" ? connectors.first : nil
+          // Access: the seeded list of choices for TBD's agent on this Mac, never the live helper.
+          let choices = tab == "permissions" ? access.first?.1 : nil
           try render(
-            SettingsView(initialSection: tab, connectors: seeded?.1, connectorsPortal: ConnectorsShotsSeed.portal).padding(15),
+            SettingsView(initialSection: tab, connectors: seeded?.1, connectorsPortal: ConnectorsShotsSeed.portal, localChoices: choices).padding(15),
             size: main, dark: dark, name: "settings-\(tab)-\(theme)")
           // A larger window too: Settings must use the width it is given (TBD-UX-01).
           try render(
-            SettingsView(initialSection: tab, connectors: seeded?.1, connectorsPortal: ConnectorsShotsSeed.portal).padding(15),
+            SettingsView(initialSection: tab, connectors: seeded?.1, connectorsPortal: ConnectorsShotsSeed.portal, localChoices: choices).padding(15),
             size: wide, dark: dark, name: "settings-\(tab)-1600-\(theme)")
+        }
+        // Access: every state of the choices (with choices, none yet, unreadable, failed read, failed remove).
+        // The pane scrolls in the app; these shots are tall so the whole list shows.
+        let tall = CGSize(width: 1280, height: 1500)
+        for (name, store) in access {
+          try render(
+            SettingsView(initialSection: "permissions", localChoices: store).padding(15),
+            size: tall, dark: dark, name: "access-\(name)-\(theme)")
         }
         // Connectors: the other states (empty, Read only, locked, install, not connected, no grant, failed).
         for (name, store) in connectors.dropFirst() {
@@ -373,6 +385,43 @@
       func accounts() async throws -> TBDConnectorAccounts { throw CocoaError(.userCancelled) }
       func choices() async throws -> TBDConnectorChoices { throw CocoaError(.userCancelled) }
       func revoke(account: String, tool: String) async throws -> TBDConnectorChoices { throw CocoaError(.userCancelled) }
+    }
+  }
+
+  // MARK: - Access shots
+
+  /// The states of the Settings › Access shots. Seeded and frozen: the stores never ask the helper; every name is made up.
+  @MainActor
+  enum LocalChoicesShotsSeed {
+    static let choices: [TBDLocalChoice] = [
+      TBDLocalChoice(key: "shell:npm test", decision: .always),
+      TBDLocalChoice(key: "write:\(NSHomeDirectory())/Projects/x", decision: .never),
+      TBDLocalChoice(key: "web:example.com", decision: .always),
+      TBDLocalChoice(key: "shell:git status && git diff --stat | head -20", decision: .always),
+      TBDLocalChoice(key: "websearch", decision: .always),
+      TBDLocalChoice(key: "shell:rm -rf build", decision: .never),
+    ]
+
+    /// The first entry is the pane as the Settings shots show it; the others are the extra states.
+    static func states() -> [(String, LocalChoicesStore)] {
+      func store(_ state: LocalChoicesState, removeFailed: Bool = false) -> LocalChoicesStore {
+        let store = LocalChoicesStore(client: SeededClient())
+        store.seed(state, removeFailed: removeFailed)
+        return store
+      }
+      return [
+        ("choices", store(LocalChoicesState(choices: choices, loaded: true))),
+        ("empty", store(LocalChoicesState(loaded: true))),
+        ("unreadable", store(LocalChoicesState(issue: .unreadable, loaded: true))),
+        ("failed", store(LocalChoicesState(choices: choices, issue: .failed, loaded: true))),
+        ("remove-failed", store(LocalChoicesState(choices: choices, loaded: true), removeFailed: true)),
+      ]
+    }
+
+    /// Never asked: a frozen store makes no call.
+    private struct SeededClient: LocalChoicesClient {
+      func choices() async throws -> TBDLocalChoices { throw CocoaError(.userCancelled) }
+      func revoke(key: String) async throws -> TBDLocalChoices { throw CocoaError(.userCancelled) }
     }
   }
 

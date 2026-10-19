@@ -32,7 +32,7 @@ public enum TBDSettingsRoute {
             switch self {
             case .account: return "Your Teal Brick Portal sign-in and workspace."
             case .models: return "The models TBD uses for its agent, summaries, cleanup and screen analysis."
-            case .permissions: return "The macOS permissions TBD needs."
+            case .permissions: return "The macOS permissions TBD needs, and your choices for TBD's agent on this Mac."
             case .connectors: return "The accounts TBD's agent may use through Connect, and your choices for it."
             case .other: return "Language, appearance and how TBD starts."
             case .about: return "Version, updates and licences."

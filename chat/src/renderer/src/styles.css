@@ -659,6 +659,7 @@ input, textarea { font: inherit; color: inherit; }
   background: var(--surface); font-family: var(--tb-font-mono);
   font-size: var(--fs-sm); word-break: break-all; overflow-wrap: anywhere;
 }
+.ask__detail--exact { white-space: pre-wrap; }
 .ask__who { margin-top: 9px; font-size: var(--fs-sm); color: var(--ink-secondary); word-break: break-word; overflow-wrap: anywhere; }
 .ask__actions { display: flex; gap: 8px; margin-top: 12px; }
 .ask__more { margin-top: 9px; font-size: var(--fs-sm); color: var(--ink-tertiary); }

@@ -52,7 +52,20 @@ export function toolResultTexts(body: Record<string, any>): string[] {
   return out;
 }
 
-export async function fakeConnectModel(steps: ModelStep[], final = "Done."): Promise<FakeModel> {
+/** The text of the last user message of a request body (what a side request such as WebFetch's page summary was asked about). */
+export function lastUserText(body: Record<string, any>): string {
+  const users = (body.messages ?? []).filter((m: { role: string }) => m.role === "user");
+  const last = users.at(-1);
+  if (!last) return "";
+  if (typeof last.content === "string") return last.content;
+  return (last.content ?? []).map((c: { type: string; text?: string }) => (c.type === "text" ? c.text ?? "" : "")).join("\n");
+}
+
+/**
+ * `echoSide`: a side request (the small model that WebFetch asks to summarise a page) answers with the text it was given, so the
+ * page text reaches the main model as the tool result exactly as the page wrote it. Default: "ok".
+ */
+export async function fakeConnectModel(steps: ModelStep[], final = "Done.", options: { echoSide?: boolean } = {}): Promise<FakeModel> {
   const seen: SeenRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     let raw = "";
@@ -62,6 +75,7 @@ export async function fakeConnectModel(steps: ModelStep[], final = "Done."): Pro
       const body = JSON.parse(raw || "{}") as Record<string, any>;
       const main = body.stream === true && (body.tools ?? []).some((t: { name: string }) => t.name.endsWith("connect__tools_call"));
       if (!main) {
+        if (options.echoSide && body.stream) { stream(res, null, 0, lastUserText(body)); return; }
         if (body.stream) { stream(res, null, 0, "ok"); return; }
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: "m", type: "message", role: "assistant", model: "claude-fake", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } }));
         return;

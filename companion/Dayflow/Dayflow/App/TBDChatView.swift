@@ -92,6 +92,8 @@ final class TBDChatRuntime: NSObject, ObservableObject, WKScriptMessageHandler, 
       "flowTaskBoardList", "flowTaskBoardComplete",
       // Connectors (C11): the accounts Connect lets TBD's agent use (a read as TBD's own agent), and the person's Always/Never rules (local file).
       "connectAccounts", "connectConsentList", "connectConsentRevoke",
+      // Settings › Access (dev.17, C13 local): the person's Always/Never choices for TBD's agent's shell, file and web actions (local file).
+      "localConsentList", "localConsentRevoke",
       // After the setup saves a new model route: TBD's agent starts again with it (review dev.10 #6).
       "restartAgent",
       // WP-HARNESS L3: the setup's 4 checks of TBD's agent with the chosen harness.

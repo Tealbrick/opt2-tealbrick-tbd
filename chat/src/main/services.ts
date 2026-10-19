@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { APP_DATA_FOLDER, ARCHIVED_V1_DEV_FOLDERS, ARCHIVED_V1_FOLDERS, agentFolder, appSupport, identityFolders } from "./appIdentity";
 import { saveAttachmentIn } from "./attachmentFile";
 import { app, nativeCall } from "../tbd/host";
-import { decide, realPath, sandboxSettings, type PolicyContext } from "./filePolicy";
+import { decide, realPath, sandboxSettings, writeScope, type PolicyContext } from "./filePolicy";
+import { createLocalConsentStore, decideLocalCall, type LocalConsentStore } from "./localConsent";
 import { currentControlPlane } from "./controlPlanes";
 import { createPortal, parsePersonSession, type PersonSession, type Portal } from "./portal";
 import { createSessionKeepAlive, type SessionKeepAlive } from "./sessionKeepAlive";
@@ -177,10 +178,31 @@ async function connectPermission(req: { tool: string; input: Record<string, unkn
   });
 }
 
+/**
+ * Local-action consent: the person's "Always allow" / "Never allow" choices for TBD's agent's shell commands, file writes and
+ * web requests, in the helper's state folder. Mode 0600. Not keyed by workspace: these choices are about this Mac.
+ */
+export function localConsentStore(): LocalConsentStore {
+  return createLocalConsentStore(join(dataDir(), "local-consent.json"));
+}
+
 /** One tool call: policy first, the person only when needed (SEC-04). */
-async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
+async function permission(req: { tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk; check?: boolean }, signal?: AbortSignal): Promise<{ allow: boolean; message?: string; remember?: "always" | "never" }> {
   if (req.connect || connectOp(req.tool) !== null) return connectPermission(req, signal);
   const ctx = policyContext();
+  // Shell, file writes and edits, web: secrets deny first, then the person's Never and Always choices, then the card.
+  const local = await decideLocalCall({ tool: req.tool, input: req.input }, {
+    store: localConsentStore(),
+    policy: (tool, input) => decide(tool, input, ctx),
+    writeScope: (tool, input) => writeScope(tool, input, ctx),
+    checkOnly: req.check === true,
+    askPerson: (card, target) => askPerson({
+      id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, agent: "TBD's agent",
+      action: target.kind === "shell" ? "run-command" : target.kind === "write" ? "write-file" : "web-request", label: card.title, detail: "", local: card,
+    }, signal),
+  });
+  if (local) return local;
+  if (req.check) return { allow: true }; // a check is only for the local tools above
   const verdict = decide(req.tool, req.input, ctx);
   if (verdict.kind === "allow") return { allow: true };
   if (verdict.kind === "deny") return { allow: false, message: verdict.reason };

@@ -79,7 +79,7 @@ export function targetPaths(tool: string, input: Record<string, unknown>, ctx: P
   const s = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
   const abs = (p: string) => realPath(resolve(ctx.workspace, expandHome(p, ctx.home)));
   const out: string[] = [];
-  if (tool === "Read" || tool === "Write" || tool === "Edit" || tool === "NotebookEdit") {
+  if (tool === "Read" || tool === "Write" || tool === "Edit" || tool === "MultiEdit" || tool === "NotebookEdit") {
     const p = s(input.file_path) ?? s(input.notebook_path); if (p) out.push(abs(p));
   } else if (tool === "Glob" || tool === "Grep") {
     out.push(abs(s(input.path) ?? "."));
@@ -90,6 +90,28 @@ export function targetPaths(tool: string, input: Record<string, unknown>, ctx: P
     }
   }
   return out;
+}
+
+/** The tools that write or edit one file. */
+const WRITE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * Where a file write or edit lands, for the person's standing Always/Never choices (main/localConsent.ts): the real file, its
+ * real folder (links resolved) and whether "Always allow" may be offered for that folder. Only a folder inside the agent's
+ * workspace or an already granted folder qualifies, never the home folder or `/`, never a protected location. `via` is the
+ * path the agent named when it differs from the real one (a link, `~`, a relative path). Null when the call names no single file.
+ */
+export interface WriteScope { file: string; folder: string; alwaysOk: boolean; via: string | null }
+export function writeScope(tool: string, input: Record<string, unknown>, ctx: PolicyContext): WriteScope | null {
+  if (!WRITE_TOOLS.has(tool)) return null;
+  const paths = targetPaths(tool, input, ctx);
+  if (paths.length !== 1) return null;
+  const file = paths[0];
+  const folder = dirname(file);
+  const named = typeof input.file_path === "string" ? input.file_path.trim() : typeof input.notebook_path === "string" ? input.notebook_path.trim() : "";
+  const inGrant = within(folder, ctx.workspace) || ctx.allowed.some((a) => within(folder, a));
+  const alwaysOk = inGrant && folder !== ctx.home && folder !== sep && isSecret(file, ctx) === null && isSecret(folder, ctx) === null;
+  return { file, folder, alwaysOk, via: named && resolve(ctx.workspace, expandHome(named, ctx.home)) !== file ? named : null };
 }
 
 /**

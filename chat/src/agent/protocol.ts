@@ -49,6 +49,12 @@ export interface AgentConfig {
    * test/connect-injection.test.ts). The helper (main/services.ts) never sets it; test/connect-negative-control.test.ts checks that.
    */
   testNoConnectConsent?: boolean;
+  /**
+   * TEST ONLY: the negative control of the local-action injection fixture (test/local-injection.test.ts). The agent process
+   * allows every local tool call at once, without asking the helper, so the fixture can see that the injected command really
+   * runs when nothing stops it. The helper (main/services.ts) never sets it; test/local-negative-control.test.ts checks that.
+   */
+  testNoLocalConsent?: boolean;
 }
 
 /** One question of the SDK's AskUserQuestion tool (1–4 per call; "Other" free text is always allowed). */
@@ -117,7 +123,11 @@ export type AgentToHelper =
   | { type: "ready" }
   | { type: "event"; id: string; event: AgentEvent }
   /** `connect` is set for a Connect call (the card is built in the helper from `input`). */
-  | { type: "permission_request"; id: string; reqId: string; tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk }
+  /**
+   * `check` is set by the agent's PreToolUse hook for a local tool (shell, file write, web): the helper answers only whether a
+   * protected location or the person's Never rule refuses the call; it shows no card and the normal permission flow follows.
+   */
+  | { type: "permission_request"; id: string; reqId: string; tool: string; detail: string; input: Record<string, unknown>; connect?: ConnectAsk; check?: boolean }
   | { type: "question"; id: string; reqId: string; questions: AgentQuestion[] }
   | { type: "done"; id: string; sessionId: string; reply: string; selfTest?: SelfTestTools }
   | { type: "error"; id?: string; message: string };

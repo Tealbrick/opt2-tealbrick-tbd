@@ -84,7 +84,7 @@ export interface AgentProfile {
 // Must match LOCAL_ACTIONS in main/localExec.ts, which is the enforcement side.
 // "local-mcp" was missing here, so the renderer's type claimed an action it can
 // actually receive was impossible — a lie directly under a permission boundary.
-export type LocalAction = "run-command" | "read-file" | "write-file" | "list-directory" | "local-mcp" | "connect-call";
+export type LocalAction = "run-command" | "read-file" | "write-file" | "list-directory" | "local-mcp" | "connect-call" | "web-request";
 export type LocalPermission = "always" | "ask" | "never";
 
 /** What the Connect consent card shows (C11): built in the helper from the call's arguments, never from the model's own words. */
@@ -112,6 +112,33 @@ export interface ConnectCard {
   hint: string;
 }
 
+/**
+ * What the card shows for a local action of TBD's agent (a shell command, a file write or edit, a web fetch or search),
+ * built in the helper from the call itself (main/localConsent.ts). Same four answers as the Connect card.
+ */
+export interface LocalCard {
+  title: string;
+  /** What `text` is: "Command", "File", "Address" or "Search". */
+  label: string;
+  /** The exact command, file path, address or search words (bidi and control characters removed; a cut is marked with "…"). */
+  text: string;
+  /** Set when `text` was cut: how much is shown. */
+  cut?: string;
+  /** "Folder: …" for a file. */
+  folderLine?: string;
+  /** "Named as: …" when the agent named the file by a link, `~` or a relative path. */
+  via?: string;
+  /** What "Always allow" covers (only when it is offered). */
+  scope?: string;
+  /** Why there is no "Always allow", or that the action leaves this Mac. */
+  note?: string;
+  /** The action sends something over the internet. */
+  leavesMac: boolean;
+  alwaysOffered: boolean;
+  /** The line under the buttons: the Always hint, or "TBD asks every time for this kind of action." */
+  hint: string;
+}
+
 /** One pending request for something on this machine, awaiting the user. */
 export interface LocalAsk {
   id: string;
@@ -127,6 +154,11 @@ export interface LocalAsk {
    * Always allow = allow + remember; Never allow = no allow + remember.
    */
   connect?: ConnectCard;
+  /**
+   * Set for a local action with standing choices (shell, file write or edit, web): same four answers as `connect`
+   * (`connectAnswers`); Always allow only when `local.alwaysOffered`.
+   */
+  local?: LocalCard;
 }
 
 /**
