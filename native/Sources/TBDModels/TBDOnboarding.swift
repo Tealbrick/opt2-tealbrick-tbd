@@ -111,13 +111,13 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
     /// Download progress 0...1 while a model downloads in the background (C286 F3: the person may go on). nil = none running.
     public var companionDownload: Double?
     public var speechDownload: Double?
-    /// Paid apps (C282) that gate a TBD function, with whether the workspace has them. Empty when unknown.
-    public var paidApps: [(name: String, function: String, active: Bool)]
+    /// Paid apps (C282) that gate a TBD function, with the workspace's access. Empty when unknown or signed out.
+    public var paidApps: [TBDPaidAppCheck]
     public init(signedIn: Bool = false, workspaceName: String? = nil, agentModelReady: Bool = false, agentModelName: String? = nil,
                 agentPaired: Bool = false, granted: Set<TBDOnboardingPermission> = [], companionModelReady: Bool = false,
                 companionModelName: String? = nil, speechModelOnDisk: Bool = false, capturePaused: Bool = false,
                 companionDownload: Double? = nil, speechDownload: Double? = nil,
-                paidApps: [(name: String, function: String, active: Bool)] = []) {
+                paidApps: [TBDPaidAppCheck] = []) {
         self.signedIn = signedIn; self.workspaceName = workspaceName; self.agentModelReady = agentModelReady
         self.agentModelName = agentModelName; self.agentPaired = agentPaired; self.granted = granted
         self.companionModelReady = companionModelReady; self.companionModelName = companionModelName
@@ -131,7 +131,7 @@ public struct TBDOnboardingChecks: Equatable, Sendable {
             && a.speechModelOnDisk == b.speechModelOnDisk
             && a.companionDownload == b.companionDownload && a.speechDownload == b.speechDownload
             && a.capturePaused == b.capturePaused
-            && a.paidApps.map { "\($0.name)|\($0.function)|\($0.active)" } == b.paidApps.map { "\($0.name)|\($0.function)|\($0.active)" }
+            && a.paidApps == b.paidApps
     }
 }
 
@@ -359,9 +359,12 @@ public enum TBDOnboardingSummary {
         }
         if c.signedIn {
             for app in c.paidApps {
-                if app.active {
+                switch app.access {
+                case .unlocked:
                     add(app.name, true, "\(app.function) works.", "Change", .portal(app: app.name))
-                } else {
+                case .install:
+                    add(app.name, false, "Your plan has \(app.name). Install it in your workspace to use \(app.function).", "Open in Portal", .portal(app: app.name))
+                case .locked:
                     add(app.name, false, "\(app.name) is not in your workspace plan.", "Open in Portal", .portal(app: app.name))
                 }
             }
@@ -405,4 +408,19 @@ public enum TBDSubscriptionPolicy {
         .langChain: false,
     ]
     public static func isAllowed(_ harness: TBDHarness) -> Bool { allowed[harness] ?? false }
+}
+
+/// One paid app the summary reports (C282): the app, the TBD function it unlocks, and the workspace's access.
+public struct TBDPaidAppCheck: Equatable, Sendable {
+    public let name: String
+    public let function: String
+    public let access: TBDAppAccess
+    public init(name: String, function: String, access: TBDAppAccess) { self.name = name; self.function = function; self.access = access }
+}
+
+public extension TBDEntitlements {
+    /// The paid apps behind a function TBD has today (WP1b: Save to Knowledge). Other gates join with their WPs.
+    var summaryChecks: [TBDPaidAppCheck] {
+        [TBDPaidAppCheck(name: TBDGatedApp.knowledge.displayName, function: "Save to Knowledge", access: access(.knowledge))]
+    }
 }

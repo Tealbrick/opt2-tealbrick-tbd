@@ -186,6 +186,12 @@ final class TBDOnboardingController: ObservableObject {
       (.accessibility, permissions.accessibility), (.notifications, permissions.notifications),
     ]
     c.granted = Set(granted.filter { $0.1 == "Allowed" }.map(\.0))
+    // C282 (WP1b): the paid apps behind TBD's functions, from the helper's cached snapshot (10 min; last good on error).
+    if account.signedIn, step == .summary {
+      c.paidApps = TBDEntitlements(helperValue: try? await TBDChatRuntime.shared.accountCall("entitlements")).summaryChecks
+    } else if account.signedIn {
+      c.paidApps = checks.paidApps
+    }
     let companion = companionModel()
     c.companionModelReady = companion != nil
     c.companionModelName = companion
