@@ -38,14 +38,28 @@ public enum TBDIdentity {
     /// True when the dev app was launched with `--design-shots <dir>`.
     public static let isDesignShots: Bool = isDev && CommandLine.arguments.contains("--design-shots")
 
-    /// A per-user folder name: `name` → `name-dev` (`name-dev-shots` in a design-shots run).
+    /// DEBUG only: `TBD_DEV_IDENTITY=<name>` (1–12 of a-z, 0-9) gives the dev app a separate, fresh identity for a
+    /// scripted fresh-install run (WP-ONB clicks measurement): folders `<name>-dev-<x>`, Keychain `<service>.dev-<x>`.
+    /// Without it, an existing dev Keychain item made by an older ad-hoc build makes macOS ask for the login password.
+    public static let devVariant: String? = {
+        guard isDev, !isDesignShots, let raw = ProcessInfo.processInfo.environment["TBD_DEV_IDENTITY"],
+              (1...12).contains(raw.count), raw.allSatisfy({ ("a"..."z").contains($0) || ("0"..."9").contains($0) }) else { return nil }
+        return raw
+    }()
+
+    /// A per-user folder name: `name` → `name-dev` (`name-dev-shots` in a design-shots run, `name-dev-<x>` with
+    /// `TBD_DEV_IDENTITY`).
     public static func folder(_ live: String) -> String {
         guard isDev else { return live }
-        return live + (isDesignShots ? "-dev-shots" : "-dev")
+        if isDesignShots { return live + "-dev-shots" }
+        return live + (devVariant.map { "-dev-" + $0 } ?? "-dev")
     }
 
-    /// A Keychain service name: `x` → `x.dev`.
-    public static func service(_ live: String) -> String { isDev ? live + ".dev" : live }
+    /// A Keychain service name: `x` → `x.dev` (`x.dev-<x>` with `TBD_DEV_IDENTITY`).
+    public static func service(_ live: String) -> String {
+        guard isDev else { return live }
+        return live + (devVariant.map { ".dev-" + $0 } ?? ".dev")
+    }
     #else
     public static let isDev = false
     public static let isDesignShots = false
