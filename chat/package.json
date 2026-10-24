@@ -28,7 +28,7 @@
     "@opt2-tealbrick/manifest": "https://github.com/Tealbrick/opt2-tealbrick-dist/releases/download/opt2-tealbrick-sdk-manifest-v0.1.1/opt2-tealbrick-manifest-0.1.1.tgz",
     "@opt2-tealbrick/spec": "https://github.com/Tealbrick/opt2-tealbrick-dist/releases/download/opt2-tealbrick-specs-spec-v0.1.2/opt2-tealbrick-spec-0.1.2.tgz",
     "@opt2-tealbrick/ui": "https://github.com/Tealbrick/opt2-tealbrick-dist/releases/download/opt2-tealbrick-packages-ui-v0.2.0/opt2-tealbrick-ui-0.2.0.tgz",
-    "zod": "4.6.5",
+    "zod": "4.6.6",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
